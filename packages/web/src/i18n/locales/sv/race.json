@@ -91,5 +91,20 @@
   "markNotReturned": "Ångra inlämning",
   "otherVariantMatch": "Stämplingarna stämmer helt med variant <b>{{key}}</b> ({{course}})",
   "acceptVariant": "Godkänn variant {{key}}",
-  "acceptVariantOffline": "Kräver servern"
+  "acceptVariantOffline": "Kräver servern",
+  "finishNotSaved": "Målgången sparades inte på den här enheten. Försök igen.",
+  "applyHoldAsk": "Avläsningen skulle ersätta det sparade resultatet ({{reason}}). Ersätta det?",
+  "applyHoldKept": "Det sparade resultatet behölls ({{reason}}). Ändra på löparen om det är fel.",
+  "applyHoldReplace": "Ersätt resultatet",
+  "applyHoldKeep": "Behåll resultatet",
+  "applyHoldDismiss": "OK",
+  "applyHoldReason_dq": "diskad",
+  "applyHoldReason_manual-status": "status satt för hand",
+  "applyHoldReason_manual-finish": "måltid satt för hand",
+  "applyHoldReason_no-finish": "ingen målstämpling på brickan",
+  "applyHoldReason_stale-punches": "stämplingarna ser ut att vara från en gammal bricka",
+  "replaceFinish": "Ersätt måltid {{time}} med nu",
+  "applyHoldReason": "se löparen",
+  "notifReadFailed": "Bricka {{number}} lästes inte: sätt i den igen",
+  "notifDismiss": "Stäng"
 }

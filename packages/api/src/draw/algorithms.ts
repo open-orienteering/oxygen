@@ -1,7 +1,12 @@
 /**
  * Draw algorithms — pure functions that take a list of runners and return
  * them in the desired start order. No DB access, no side effects.
+ *
+ * Every random choice comes from the injected `rng`, so a draw is
+ * reproducible from its seed (the applied draw is the previewed draw).
  */
+
+import type { Rng } from "./rng.js";
 
 export interface DrawRunner {
   /** Runner UUID — opaque to the algorithm. */
@@ -17,13 +22,8 @@ export interface DrawRunner {
 /**
  * Fisher-Yates shuffle — uniformly random permutation.
  */
-export function randomDraw(runners: DrawRunner[]): DrawRunner[] {
-  const arr = [...runners];
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
+export function randomDraw(runners: DrawRunner[], rng: Rng): DrawRunner[] {
+  return shuffle(runners, rng);
 }
 
 /**
@@ -40,7 +40,7 @@ export function randomDraw(runners: DrawRunner[]): DrawRunner[] {
  * 4. Shuffle within each group, then shuffle the group order
  * 5. Flatten to produce the final order
  */
-export function clubSeparationDraw(runners: DrawRunner[]): DrawRunner[] {
+export function clubSeparationDraw(runners: DrawRunner[], rng: Rng): DrawRunner[] {
   if (runners.length <= 1) return [...runners];
 
   const byClub = new Map<number, DrawRunner[]>();
@@ -51,7 +51,7 @@ export function clubSeparationDraw(runners: DrawRunner[]): DrawRunner[] {
   }
 
   const clubs = [...byClub.entries()]
-    .map(([clubId, members]) => ({ clubId, members: shuffle(members) }))
+    .map(([clubId, members]) => ({ clubId, members: shuffle(members, rng) }))
     .sort((a, b) => b.members.length - a.members.length);
 
   const largestClub = clubs[0].members.length;
@@ -72,9 +72,9 @@ export function clubSeparationDraw(runners: DrawRunner[]): DrawRunner[] {
 
   // Shuffle within each group and shuffle group order
   for (const g of groups) {
-    shuffleInPlace(g);
+    shuffleInPlace(g, rng);
   }
-  shuffleInPlace(groups);
+  shuffleInPlace(groups, rng);
 
   // Flatten, but check for same-club neighbors and swap if possible
   const result = groups.flat();
@@ -95,6 +95,7 @@ export function clubSeparationDraw(runners: DrawRunner[]): DrawRunner[] {
  */
 export function seededDraw(
   runners: DrawRunner[],
+  rng: Rng,
   options: { clubSeparation?: boolean } = {},
 ): DrawRunner[] {
   const seeded: DrawRunner[] = [];
@@ -112,8 +113,8 @@ export function seededDraw(
   seeded.sort((a, b) => b.rank - a.rank);
 
   const orderedUnseeded = options.clubSeparation
-    ? clubSeparationDraw(unseeded)
-    : randomDraw(unseeded);
+    ? clubSeparationDraw(unseeded, rng)
+    : randomDraw(unseeded, rng);
 
   const orderedSeeded = options.clubSeparation
     ? applyClubSeparationToOrder(seeded)
@@ -126,21 +127,21 @@ export function seededDraw(
  * Simultaneous (mass start) — all runners start at the same time.
  * Order doesn't matter for timing, but we shuffle for start number assignment.
  */
-export function simultaneousDraw(runners: DrawRunner[]): DrawRunner[] {
-  return randomDraw(runners);
+export function simultaneousDraw(runners: DrawRunner[], rng: Rng): DrawRunner[] {
+  return randomDraw(runners, rng);
 }
 
 // ─── Helpers ─────────────────────────────────────────────────
 
-function shuffle<T>(arr: T[]): T[] {
+function shuffle<T>(arr: T[], rng: Rng): T[] {
   const copy = [...arr];
-  shuffleInPlace(copy);
+  shuffleInPlace(copy, rng);
   return copy;
 }
 
-function shuffleInPlace<T>(arr: T[]): void {
+function shuffleInPlace<T>(arr: T[], rng: Rng): void {
   for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(rng() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
 }

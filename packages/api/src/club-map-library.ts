@@ -14,6 +14,7 @@ import { canDownloadClubLibraryMap } from "./ocad-export.js";
 import { meridianStalenessFromDetection } from "./map-north.js";
 import { documentFrameSchema, mapFileMetadataFor } from "./map-store/map-file-metadata.js";
 import { reportNorth } from "./map-store/event-document.js";
+import { contourIntervalM } from "@oxygen/shared/src/terrain/index.js";
 
 export interface Person {
   email: string;
@@ -28,6 +29,7 @@ export interface ClubMapRowInput {
     colourOverrides: unknown;
     northLinesBelow: boolean;
     rotationCorrection: number;
+    contourIntervalM: number | null;
     createdBy: string | null;
     createdAt: Date;
     creator: Person | null;
@@ -97,6 +99,10 @@ export function projectClubMapRow({ series, version, versionCount, job }: ClubMa
     colorOverrides: (series.colourOverrides ?? {}) as { above?: number[]; below?: number[] },
     northLinesBelow: series.northLinesBelow,
     rotationCorrection: series.rotationCorrection,
+    /** The contour interval a person confirmed for the map (docs/course-elevation.md §0.43); null: not confirmed. */
+    contourIntervalM: series.contourIntervalM,
+    /** The interval the map's contours were assumed to count (the prefill); null before the first version. */
+    assumedContourIntervalM: version ? contourIntervalM({ library: (version.document.header as Pick<mapDocument.MapDocumentHeader, "library"> | null)?.library ?? null }) : null,
     createdBy: series.createdBy,
     createdAt: series.createdAt.toISOString(),
     version: version

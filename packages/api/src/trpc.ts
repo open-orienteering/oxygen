@@ -7,9 +7,13 @@ import type { PrismaClient } from "./generated/prisma/client.js";
 import { prisma, resolveEvent, type EventRef } from "./db.js";
 import {
   SYNC_SECRET_HEADER,
+  SYNC_NODE_ID_HEADER,
+  SYNC_FORWARDED_CAPS_HEADER,
+  SYNC_FORWARDED_HEADER,
+  nodeId,
   syncSharedSecret,
 } from "./sync/nodeIdentity.js";
-import { assertRaceWritable } from "./sync/lease.js";
+import { assertRaceWritable, getActiveLease } from "./sync/lease.js";
 import { VersionConflictError } from "./version-conflict.js";
 import {
   authDevEmail,
@@ -22,9 +26,10 @@ import {
   type AuthUser,
 } from "./auth.js";
 import type { Capability } from "@oxygen/shared";
-import { ALL_CAPABILITIES } from "@oxygen/shared";
+import { ALL_CAPABILITIES, isCapability } from "@oxygen/shared";
 import { resolveEventCapabilities } from "./permissions.js";
 import { timingSafeEqual } from "node:crypto";
+import { EventorTimeoutError } from "./eventor.js";
 
 export const KIOSK_KEY_HEADER = "x-kiosk-key";
 
@@ -34,6 +39,8 @@ export interface Context {
   event: EventRef | null;
   /** Node-to-node shared secret from the request, if any (see peerProcedure). */
   syncSecret?: string | null;
+  /** `NODE_ID` the calling peer announced (`x-oxygen-node-id`), if any. */
+  peerNodeId?: string | null;
   /** Invited user matching the proxy identity, or null. */
   user: AuthUser | null;
   /** Parsed identity email even when the user is not invited. */
@@ -43,6 +50,20 @@ export interface Context {
   authMode: AuthMode;
   /** Device token from `x-kiosk-key` / `?k=`. */
   kioskKey: string | null;
+  /**
+   * Set when a venue forwarded this call (`x-oxygen-forwarded`) with this
+   * node's secret: the call runs as that node, not as a user. It passes
+   * `authedProcedure`, never `adminProcedure`, and holds capabilities only
+   * on an event whose active lease the node holds (`capabilitiesForEventRow`).
+   * Null for every other request, including a marked one with a wrong secret.
+   */
+  nodeForward?: { nodeId: string | null } | null;
+  /**
+   * The capabilities the forwarding box vouched for (`x-oxygen-forwarded-caps`:
+   * a list, `*` or `none`), only on a `nodeForward` call; an absent header is
+   * the empty set. Null on every other request.
+   */
+  forwardedCaps?: Set<Capability> | null;
 }
 
 /**
@@ -54,12 +75,14 @@ export interface Context {
 export async function createContext(
   opts: CreateFastifyContextOptions,
 ): Promise<Context> {
-  const raw =
-    opts.req.headers["x-event-id"] ?? opts.req.headers["x-competition-id"];
-  const nameId = (Array.isArray(raw) ? raw[0] : raw) ?? "";
+  const first = (h: string | string[] | undefined) => (Array.isArray(h) ? h[0] : h) || "";
+  // `||`: an empty x-event-id does not shadow x-competition-id.
+  const nameId = first(opts.req.headers["x-event-id"]) || first(opts.req.headers["x-competition-id"]);
   const event = nameId ? await resolveEvent(nameId) : null;
   const secretRaw = opts.req.headers[SYNC_SECRET_HEADER];
   const syncSecret = (Array.isArray(secretRaw) ? secretRaw[0] : secretRaw) ?? null;
+  const peerRaw = opts.req.headers[SYNC_NODE_ID_HEADER];
+  const peerNodeId = (Array.isArray(peerRaw) ? peerRaw[0] : peerRaw)?.trim() || null;
   const kioskRaw = opts.req.headers[KIOSK_KEY_HEADER];
   const kioskKey = (Array.isArray(kioskRaw) ? kioskRaw[0] : kioskRaw)?.trim() || null;
 
@@ -67,10 +90,31 @@ export async function createContext(
   const enabled = mode !== "off";
   let identityEmail: string | null = null;
   let user: AuthUser | null = null;
+  // A venue's forwarded call is the node, never a user: whatever identity
+  // header rides along is ignored, and a marker without the node secret
+  // leaves the caller anonymous (UNAUTHORIZED), not a user by their header.
+  const forwarded = opts.req.headers[SYNC_FORWARDED_HEADER] !== undefined;
+  // The peer must name itself, and not as this node: a forward that claims
+  // the cloud's own id (or none) is treated as anonymous.
+  const nodeForward =
+    forwarded && syncSecretMatches(syncSecret) && peerNodeId && peerNodeId !== nodeId()
+      ? { nodeId: peerNodeId }
+      : null;
+
+  const capsRaw = opts.req.headers[SYNC_FORWARDED_CAPS_HEADER];
+  const capsHeader = Array.isArray(capsRaw) ? capsRaw[0] : capsRaw;
+  // Fail closed: a forward without the header holds nothing; `*` (a box with login off) is every capability, `none` none.
+  const forwardedCaps = nodeForward
+    ? capsHeader?.trim() === "*"
+      ? new Set<Capability>(ALL_CAPABILITIES)
+      : new Set((capsHeader ?? "").split(",").map((c) => c.trim()).filter(isCapability))
+    : null;
 
   if (mode === "proxy") {
-    identityEmail = parseIdentityEmail(opts.req.headers[authHeaderName()]);
-    if (identityEmail) user = await resolveUser(identityEmail);
+    if (!forwarded) {
+      identityEmail = parseIdentityEmail(opts.req.headers[authHeaderName()]);
+      if (identityEmail) user = await resolveUser(identityEmail);
+    }
   } else if (mode === "dev") {
     identityEmail = parseIdentityEmail(authDevEmail()) ?? "dev@localhost";
     user = await resolveUser(identityEmail, { implicitAdmin: true });
@@ -79,11 +123,14 @@ export async function createContext(
   return {
     event,
     syncSecret,
+    peerNodeId,
     user,
     identityEmail,
     authEnabled: enabled,
     authMode: mode,
     kioskKey,
+    nodeForward,
+    forwardedCaps,
   };
 }
 
@@ -110,6 +157,14 @@ export const createCallerFactory = t.createCallerFactory;
 export const publicProcedure = t.procedure.use(async ({ path, next }) => {
   const result = await next();
   if (!result.ok) {
+    // Every Eventor call that runs out of time (a read: sync, preview, import,
+    // club and runner sync, key check, competitor download; or an upload)
+    // surfaces as TIMEOUT.
+    const cause = result.error.cause;
+    if (cause instanceof EventorTimeoutError) {
+      console.warn(`[tRPC TIMEOUT] ${path}: ${cause.message}`);
+      throw new TRPCError({ code: "TIMEOUT", message: cause.message, cause });
+    }
     console.error(`[tRPC ERROR] ${path}:`, result.error);
   }
   return result;
@@ -117,7 +172,7 @@ export const publicProcedure = t.procedure.use(async ({ path, next }) => {
 
 /** Require an invited user when AUTH_MODE is on; pass through when off. */
 export const authedProcedure = publicProcedure.use(async ({ ctx, next }) => {
-  if (ctx.authEnabled && !ctx.user) {
+  if (ctx.authEnabled && !ctx.user && !ctx.nodeForward) {
     throw new TRPCError({
       code: "UNAUTHORIZED",
       message: "Not authenticated",
@@ -126,7 +181,10 @@ export const authedProcedure = publicProcedure.use(async ({ ctx, next }) => {
   return runWithActor(ctx.user?.id ?? null, () => next());
 });
 
-/** Authed, and an instance admin when AUTH_MODE is on. */
+/**
+ * Authed, and an instance admin when AUTH_MODE is on. A forwarded node call
+ * has no user, so it is never admin.
+ */
 export const adminProcedure = authedProcedure.use(async ({ ctx, next }) => {
   if (ctx.authEnabled && !ctx.user?.isAdmin) {
     throw new TRPCError({
@@ -188,8 +246,10 @@ export const eventProcedure = authedProcedure.use(requireEvent).use(async ({ ctx
  * Event-scoped procedure for race-critical mutations (the journaled set).
  * Adds the single-writer lease guard: when the event is checked out to
  * another node, the mutation fails with a typed PRECONDITION_FAILED before
- * any write happens. `events.push` is NOT guarded — it is the journal
- * ingestion sink and must accept shipped/drained entries on every node.
+ * any write happens. `events.push` is NOT guarded and is not an
+ * `eventProcedure` at all (`publicEventProcedure`: node secret or signed-in
+ * user, then a per-entry capability check) — it is the journal ingestion
+ * sink and must accept shipped/drained entries on every node.
  */
 export const raceProcedure = eventProcedure.use(async ({ ctx, next }) => {
   const ectx = ctx as EventContext;
@@ -198,14 +258,36 @@ export const raceProcedure = eventProcedure.use(async ({ ctx, next }) => {
 });
 
 /**
- * Event-scoped procedure reserved for node-to-node calls (journal shipping).
- * Requires `SYNC_SHARED_SECRET` to be configured on this node AND presented
- * by the caller in the `x-oxygen-sync-secret` header. Without a configured
- * secret every call is refused — peering is opt-in.
- *
- * Does not require a human user — machine identity is the shared secret.
+ * Event-scoped, no user gate: the base of procedures that decide their own
+ * authentication (`events.push`: node secret or signed-in user; the kiosk
+ * variants). Unlike `eventProcedure` it does not chain `authedProcedure`, so
+ * a request authenticated only by the node secret passes on an invite-only
+ * node.
  */
-export const peerProcedure = publicProcedure.use(requireEvent).use(async ({ ctx, next }) => {
+export const publicEventProcedure = publicProcedure.use(requireEvent);
+
+/**
+ * Whether a presented node secret equals this node's `SYNC_SHARED_SECRET`
+ * (length check, then `timingSafeEqual`, like `kioskKeyMatches`). False when
+ * either side is empty.
+ */
+export function syncSecretMatches(
+  presented: string | null | undefined,
+  expected: string | null | undefined = syncSharedSecret(),
+): boolean {
+  if (!presented || !expected) return false;
+  const a = Buffer.from(presented);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * The node-secret check shared by `peerProcedure` and `events.push`. Throws
+ * `PRECONDITION_FAILED` when this node has no `SYNC_SHARED_SECRET` (peering
+ * is opt-in) and `UNAUTHORIZED` when the presented secret is wrong.
+ */
+export function assertNodeSecret(presented: string | null | undefined): void {
   const expected = syncSharedSecret();
   if (!expected) {
     throw new TRPCError({
@@ -213,12 +295,26 @@ export const peerProcedure = publicProcedure.use(requireEvent).use(async ({ ctx,
       message: "Node-to-node sync is not configured on this node (no SYNC_SHARED_SECRET)",
     });
   }
-  if (ctx.syncSecret !== expected) {
+  if (!syncSecretMatches(presented, expected)) {
     throw new TRPCError({
       code: "UNAUTHORIZED",
       message: "Invalid or missing node sync secret",
     });
   }
+}
+
+/**
+ * Event-scoped procedure reserved for node-to-node calls (journal pull).
+ * Requires `SYNC_SHARED_SECRET` to be configured on this node AND presented
+ * by the caller in the `x-oxygen-sync-secret` header. Without a configured
+ * secret every call is refused — peering is opt-in.
+ *
+ * Does not require a human user — machine identity is the shared secret.
+ * `events.push` accepts the same secret as an alternative to a signed-in
+ * user (see `assertNodeSecret`).
+ */
+export const peerProcedure = publicEventProcedure.use(async ({ ctx, next }) => {
+  assertNodeSecret(ctx.syncSecret);
   return next();
 });
 
@@ -244,17 +340,56 @@ async function eventDateFor(
   return row?.date ?? new Date(0);
 }
 
+/**
+ * A forwarded node call is the box, not a person: it may not create or delete
+ * events (they would be ownerless, or the checked-out event could be removed
+ * from under its own lease) or import one from Eventor. Do these on the cloud.
+ */
+export function assertNotNodeForward(ctx: Pick<Context, "user" | "nodeForward">): void {
+  if (!ctx.user && ctx.nodeForward) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Do this on the cloud: a venue box may not create, import or delete events",
+    });
+  }
+}
+
+/**
+ * The capabilities a request holds on one event row. A signed-in user: their
+ * grants. A forwarded node call (no user): everything on an event whose
+ * active lease this node holds (the event is checked out to it, so it is the
+ * node's to administer), nothing otherwise. Handlers that check an event
+ * other than `ctx.event` (`event.delete`) call this instead of
+ * `resolveEventCapabilities`, so the node rule cannot be forgotten there.
+ */
+export async function capabilitiesForEventRow(
+  ctx: Pick<Context, "user" | "authEnabled" | "nodeForward"> & { forwardedCaps?: Set<Capability> | null },
+  event: { id: bigint; date: Date },
+  db: PrismaClient = prisma(),
+): Promise<Set<Capability>> {
+  if (!ctx.authEnabled) return new Set(ALL_CAPABILITIES);
+  if (!ctx.user && ctx.nodeForward) {
+    const holder = ctx.nodeForward.nodeId;
+    if (!holder) return new Set();
+    const lease = await getActiveLease(db, event.id);
+    if (lease?.holderNodeId !== holder) return new Set();
+    // The box vouches for what its signed-in caller may do; the node never does more than that.
+    return new Set(ALL_CAPABILITIES.filter((c) => ctx.forwardedCaps?.has(c)));
+  }
+  return resolveEventCapabilities({
+    db,
+    eventId: event.id,
+    eventDate: event.date,
+    user: ctx.user,
+    authEnabled: ctx.authEnabled,
+  });
+}
+
 export async function capabilitiesForContext(
   ctx: EventContext,
 ): Promise<Set<Capability>> {
   const date = await eventDateFor(ctx);
-  return resolveEventCapabilities({
-    db: ctx.db,
-    eventId: ctx.event.id,
-    eventDate: date,
-    user: ctx.user,
-    authEnabled: ctx.authEnabled,
-  });
+  return capabilitiesForEventRow(ctx, { id: ctx.event.id, date }, ctx.db);
 }
 
 function requireCapability(cap: Capability) {
@@ -356,10 +491,3 @@ export const kioskOrViewProcedure = kioskOrCapProcedure("event.view");
  */
 export const kioskOrCoursesViewProcedure = kioskOrCapProcedure("courses.view");
 export const kioskOrRaceOperateProcedure = kioskOrCapProcedure("race.operate");
-export const kioskOrRaceOperateRaceProcedure = kioskOrCapProcedure(
-  "race.operate",
-).use(async ({ ctx, next }) => {
-  const ectx = ctx as EventContext;
-  await assertRaceWritable(ectx.db, ectx.event.id);
-  return next();
-});

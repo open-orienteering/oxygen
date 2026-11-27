@@ -374,6 +374,8 @@ rasteriser.
 
 ### 4.6 Variant pages
 
+(Description sheets print per variant too: §6.4.)
+
 A **root** (a course with variation groups, `course-layer.md` §12) has
 no page of its own: print is always one variant (08 §5.3). Each of its
 own `kind = 'course'` sheets — the layout the variants share (08 §4.6,
@@ -621,7 +623,11 @@ written (`/Subtype /Image`, `Im<n>` in first-use order; RGB with an
 operators, which draw `q <quad> cm [0 0 1 1 re W n <crop> cm] /Imn Do
 Q` in stream order — stretched to the box like the legacy
 `preserveAspectRatio="none"`, the crop's part filling it. A placement
-without bytes is skipped with `IMAGE_MISSING` (one warning each); a page
+without bytes is skipped with `IMAGE_MISSING` (one warning each) — except
+an attached image that hides its control's circle or number
+(`hideControlCircle` / `hideControlNumber`), whose absence prints the
+control bare: that fails the print (`PrintGraphicMissingError`, CRS-010,
+§8.2 item 5); a page
 without images writes the same bytes as before J5 (a digest test).
 
 **SVG logos** are rasterised in the API at render time (05 §5.7 a), so
@@ -680,7 +686,8 @@ UI), no base map and no template.
 | `cell` | `5` · `6` · `7` (mm) | `6` |
 | `gap` | mm between blocks, 0–30 | `5` |
 
-- **One block per class** (or per course with `courses=`). The block is
+- **One block per class** (or per course with `courses=`), **per variant on
+  a forked course** (below). The block is
   the map page's (§6.2): rows and header from `resolveMapLayout` — the
   function every sheet resolves through (§5) — on a stand-in A4
   template, so start, controls, special rows, the finish and its
@@ -688,15 +695,30 @@ UI), no base map and no template.
   are the sheet's by construction. The header names the class
   (`classes=`, as a class prints its map, `course-layout.md` §6) or every
   class of the course (`courses=`). A class without a course is skipped.
+- **A forked course prints one block per variant** (CRS-009, review D5).
+  A class (or `courses=`) on a root with live variants prints one block
+  per variant, in key order, each on its own page: the child's own rows,
+  codes, ends and instructions, labelled `<class> <key>` (`H21 AB`;
+  `courses=` labels it with the child's name, `Long AB`) and with the
+  header's course name the child's. `courses=<child seq>` is that one
+  variant on its root's classes; a child asked beside its root is
+  absorbed, as `maps.pdf`'s `courses=` does. There is no special case for a
+  root whose variants number alike.
 - **Copies.** `count` = the class's runners (not removed, not withdrawn:
   `class.list`'s count) + its `vacant_count`; a course's = the sum over its
   classes; at least 1, so a class with nobody yet still prints a proof.
-  `fill` = as many as one sheet holds; a number = that many.
+  `fill` = as many as one sheet holds; a number = that many. On a forked
+  course a variant's `count` = the class's runners whose `course_id` is
+  that variant; the rest (vacancies, runners without a variant, runners on
+  another course) are allotted one at a time to the variant with the
+  fewest copies so far, ties in key order (`pickLeastPopulated`, which
+  `assignVariant` uses too, except that it counts withdrawn runners). The floor of 1 copy per block stays.
 - **Tiling** (`tileDescriptionSheets`, `print/description-sheet.ts`; pure):
   A4 portrait, a 10 mm margin; the block `8 × cell` wide and
   `cell × (rows + 3)` high (`descriptionBlockSize`); columns =
   `⌊(190 + gap) / (8·cell + gap)⌋`, rows likewise over 277 mm. Blocks are
-  placed row-major from the top-left. **Classes never share a page**: a
+  placed row-major from the top-left. **Blocks never share a page** (a
+  forked class has one block per variant): a
   class's copies run onto as many pages as they need, the next class
   starts a new page, so every page has one label. A 14-row block (12
   controls) fits 4 × 3 at 5 mm, 3 × 2 at 6 and 7 mm (gap 5). A block
@@ -941,7 +963,15 @@ re-import (the review's colour decisions).
    for a worker holds no permit.
 5. Composer and writer warnings (`NO_FONT` for a page text in a family
    with no face, `IMAGE_MISSING`, `SVG_RASTER`) go to the log at `warn`;
-   the PDF is still served. So do the patch's skipped ops (G14,
+   the PDF is still served — except that a graphic that stands in for a
+   control (an attached image with `hideControlCircle` or
+   `hideControlNumber`, drawn on the page) that could not be loaded fails
+   the print (CRS-010): `renderCoursePages` throws
+   `PrintGraphicMissingError` (message `<sheet>: graphic <id> could not be
+   loaded and it replaces the circle or number of control <code>; restore
+   the graphic or untick the hide options`), a 400 on the route; the
+   device's worker answers `error` and the server composes and answers the
+   same 400. Any other missing graphic (a logo) stays a warning. So do the patch's skipped ops (G14,
    `map-patches.md` §2.3): `renderCoursePages` puts one
    `PATCH_ISSUE: <opId>: <code>` per `PreparedDocument.patchIssues` entry
    into `warnings` before any page's (no page owns them), and the route logs
@@ -1141,7 +1171,8 @@ SVG graphics through `rasteriseSvg`, which since G15 receives the graphic
 id as a fourth argument and asks `host.graphic(id, [w, h])` (the API's
 binding ignores the id). A graphic the host cannot fetch is left out:
 `IMAGE_MISSING` for a PNG, `SVG_RASTER` for an SVG — the PDF is still
-written, as on the server.
+written, as on the server, unless the graphic hides a control's circle or
+number (`PrintGraphicMissingError`, §8.2 item 5; CRS-010).
 
 ### 8.6 Composing on the device (G16)
 
@@ -1229,7 +1260,12 @@ box, an SVG once per box the composer asks (§8.5) — and the faces through
 `packages/shared/fonts/` in the order regular, narrow, bold, the vector
 viewer's own (already runtime-cached as `map-fonts`). A graphic that
 cannot be fetched is answered with `error`: the writer's `IMAGE_MISSING`
-/ `SVG_RASTER`, as on the server. The worker keeps `prepareDocument`'s
+/ `SVG_RASTER`, as on the server; a hiding graphic that is missing is
+`PrintGraphicMissingError`'s message and name as `error` (the client falls back to
+the server, whose 400 is the export's error line; a stored offline job is
+`OfflinePrintError("failed", message)`; the offline store step skips that
+job, lists it in `skipped` and goes on, partial, while any other compose
+failure still ends it as an `OfflinePrepareError`). The worker keeps `prepareDocument`'s
 cache (the last two hash + patch-version keys, §8.2; G14), so a second
 export of the same event asks the document no more until the event's
 patch changes; it is terminated after 60 s idle
@@ -1471,9 +1507,12 @@ browser's HTTP cache. Checked by hand at G29; not part of the suite.
 
 The smoke does not cover:
 - offline navigation (the `navigateFallback` shell);
-- the `trpc-api` and `api-misc` routes;
 - the update prompt;
 - graphics (`print.png`), which the dev-server E2E stores.
+
+(The `trpc-api` and `api-misc` routes it did not cover either were removed
+in review package 9, SYNC-16; `e2e/outage.preview.spec.ts` checks that no
+tRPC answer is cached.)
 
 ### 8.7 On a venue box (G18)
 
@@ -1531,6 +1570,9 @@ back to the box's `maps.pdf`.
 | `packages/api/src/__tests__/course-map-graphics.test.ts` (G15 part) | §6.3 (G15): `parseRasterBox`, `sheetGraphicIds`; regression for `docs/bugfixes/course-object-image-print.md` |
 | `packages/api/src/__tests__/integration/venue-print.test.ts` (G18) | §8.7 (G14) |
 | `e2e/course-maps.spec.ts` "export on a venue box whose cloud is unreachable" (G18) | §8.7 |
+| `packages/shared/src/print/__tests__/course-pages.test.ts` (CRS-010) | a hiding attached image without bytes (PNG, and SVG without a rasteriser) throws `PrintGraphicMissingError` naming the control; the same image without hide flags, a page logo and a free image with the flags still warn |
+| `packages/api/src/__tests__/integration/descriptions-pdf.test.ts` (CRS-009) | a forked class: one block per variant (`H21 AB` 3, `H21 BA` 3 from 3 + 1 runners and 2 vacancies; rows differ), `courses=<root>` the per-variant sum, `courses=<child>` one block on the parent's class, a withdrawn runner not counted, a plain class unchanged, page labels per variant |
+| `packages/shared/src/course/__tests__/derive.test.ts` (CRS-024) | an unplaced control takes its number (1, 2, 4, 5), the second part's first number counts it, a `numberHidden` visit keeps its number |
 | `packages/shared/src/print/__tests__/print-job.test.ts` (G15, G14) | `renderPrintJob` equals `renderCoursePages` for the same inputs (copies, a PNG and an SVG; the PNG fetched once without a box, the SVG once per box by id; a cropped SVG asked with its window); a JSON round trip gives equal bytes; an unfetchable graphic gives `SVG_RASTER` / `IMAGE_MISSING` and a PDF; the document read once per hash; version 1 refused; with a patch (G14): `renderCoursePages`' bytes over the patched prepared document and not the unpatched ones, a JSON round trip equal, a disabled patch the unpatched bytes, a skipped op a `PATCH_ISSUE` warning and still a PDF |
 | `packages/shared/src/print/__tests__/prepared-document.test.ts` (G13, G14) | §8.2 (G13, G14): the prepared document cache, with and without a patch |
 | `e2e/course-maps.spec.ts` "export a course that has no template yet" (G15, G14 part) | §8.5 (G14, G15): the print job of a course with no template yet |
@@ -1962,6 +2004,15 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
 | `packages/api/src/render/__tests__/page-raster.test.ts` "composites the layers' premultiplied pixels" | the oracle fix the run forced (`docs/bugfixes/page-oracle-premultiplied.md`) |
 
 ## Pending in this chapter
+
+- **Print warnings stay in the log** (CRS-010 follow-up): only a graphic
+  that replaces a control's circle or number fails a print; the other
+  warnings (`IMAGE_MISSING` for a logo, `SVG_RASTER`, `NO_FONT`) reach no
+  one on screen. See `docs/bugfixes/course-print-followups.md`.
+- **Variant-less runners of a forked class** on a plain per-runner course
+  count as "unassigned" and are dealt over the variants on description
+  sheets (§6.4); `maps.pdf`'s `copies=runners` counts withdrawn runners,
+  description sheets do not.
 
 - **SVG graphics stored before the upload trim** (2026-11-19) keep the
   canvas they were uploaded with; the window raster (§6.3) keeps their

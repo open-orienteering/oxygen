@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
-import { computeCardReadout, courseOf } from "../offline/local-readout";
+import { computeCardReadout, courseOf, lookupRunnerByCard } from "../offline/local-readout";
 import { RunnerStatus } from "@oxygen/shared";
 
 const pos = (code: number) => ({ codes: [code], skipMatching: false, noTimingLeg: false });
@@ -98,5 +98,100 @@ describe("computeCardReadout: another variant matched (F6c)", () => {
     expect(ok.otherVariantMatches).toEqual([]);
     const plain = computeCardReadout({ cardNo: 512, ...bPunches }, client([runner(6, 512, 11)]))!;
     expect(plain.otherVariantMatches).toEqual([]);
+  });
+});
+
+describe("cache lookup (MC-19 / BLD-24)", () => {
+  const runners = [runner(1, 111, 10)];
+  const readout = {
+    cardNo: 111,
+    startTime: 36000,
+    finishTime: 39600,
+    punches: [
+      { controlCode: 31, time: 36600 },
+      { controlCode: 32, time: 37200 },
+      { controlCode: 34, time: 37800 },
+    ],
+  };
+
+  it("ignores a filtered runner.list ({search}) cached before the full list", () => {
+    const qc = new QueryClient();
+    qc.setQueryData([["competition", "dashboard"], { type: "query" }], dashboard);
+    qc.setQueryData([["runner", "list"], { input: { search: "zz" }, type: "query" }], []);
+    qc.setQueryData([["runner", "list"], { type: "query" }], runners);
+    expect(computeCardReadout(readout, qc)?.runner.id).toBe(1);
+  });
+
+  it("skips a query that has no data yet", () => {
+    const qc = new QueryClient();
+    qc.setQueryData([["competition", "dashboard"], { type: "query" }], dashboard);
+    qc.getQueryCache().build(qc, { queryKey: [["runner", "list"], { input: {}, type: "query" }] });
+    qc.setQueryData([["runner", "list"], { type: "query" }], runners);
+    expect(computeCardReadout(readout, qc)?.runner.id).toBe(1);
+  });
+
+  it("with only a filtered list cached there is no local result", () => {
+    const qc = new QueryClient();
+    qc.setQueryData([["competition", "dashboard"], { type: "query" }], dashboard);
+    qc.setQueryData([["runner", "list"], { input: { search: "a" }, type: "query" }], runners);
+    expect(computeCardReadout(readout, qc)).toBeNull();
+  });
+
+  it("returns nothing when the cache belongs to another event", () => {
+    const qc = client(runners);
+    qc.setQueryData(["oxygen", "cacheOwner"], "event-a");
+    expect(computeCardReadout(readout, qc, "event-a")?.runner.id).toBe(1);
+    expect(computeCardReadout(readout, qc, "event-b")).toBeNull();
+    expect(lookupRunnerByCard(111, qc, "event-b")).toBeUndefined();
+    expect(computeCardReadout(readout, qc, null)).toBeNull();
+  });
+});
+
+describe("offline status and position (RES-20 / CRS-045)", () => {
+  // Plain course 31 32 34; the run below takes 1:00:00 and punches all three.
+  const okPunches = {
+    startTime: 36000,
+    finishTime: 39600,
+    punches: [
+      { controlCode: 31, time: 36600 },
+      { controlCode: 32, time: 37200 },
+      { controlCode: 34, time: 37800 },
+    ],
+  };
+  const dash = (cls: object) => ({ ...dashboard, classes: [{ id: 1, name: "H21", courseId: 10, ...cls }] });
+  const peer = (id: number, status: number, minutes: number) => ({
+    ...runner(id, 900 + id),
+    status,
+    startTime: 360000,
+    finishTime: 360000 + minutes * 600,
+  });
+
+  it("a no-timing class reads out as NoTiming with no position", () => {
+    const r = computeCardReadout({ cardNo: 600, ...okPunches }, client([runner(1, 600)], dash({ noTiming: true })))!;
+    expect(r.timing.status).toBe(RunnerStatus.NoTiming);
+    expect(r.position).toBeNull();
+  });
+
+  it("applies the class's max time", () => {
+    const r = computeCardReadout({ cardNo: 601, ...okPunches }, client([runner(1, 601)], dash({ maxTime: 30000 })))!;
+    expect(r.timing.status).toBe(RunnerStatus.OverMaxTime);
+    expect(r.position).toBeNull();
+  });
+
+  it("ranks only against OK runners", () => {
+    const r = computeCardReadout(
+      { cardNo: 602, ...okPunches },
+      client([runner(1, 602), peer(2, RunnerStatus.MissingPunch, 30), peer(3, RunnerStatus.DQ, 40), peer(4, RunnerStatus.OK, 70)], dash({})),
+    )!;
+    expect(r.timing.status).toBe(RunnerStatus.OK);
+    expect(r.position).toMatchObject({ rank: 1, total: 2 });
+  });
+
+  it("gives no position to a mispunch", () => {
+    const mp = { ...okPunches, punches: okPunches.punches.slice(0, 2) };
+    const r = computeCardReadout({ cardNo: 603, ...mp }, client([runner(1, 603), peer(4, RunnerStatus.OK, 70)], dash({})))!;
+    expect(r.timing.status).toBe(RunnerStatus.MissingPunch);
+    expect(r.position).toBeNull();
+    expect(r.classResults).toEqual([]);
   });
 });

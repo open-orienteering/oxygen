@@ -1,15 +1,17 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import {
   formatMeosTime,
   formatRunningTime,
-  parseMeosTime,
+  parseClockTime,
   RunnerStatus,
   TransferFlags,
   hasTransferFlag,
   type RunnerStatusValue,
+  type RunnerEventorDiff,
 } from "@oxygen/shared";
+import { EventorMarker } from "./EventorMarker";
 import { PunchTable } from "./PunchTable";
 import { OtherVariantBanner } from "./OtherVariantBanner";
 import { ClubLogo } from "./ClubLogo";
@@ -17,6 +19,16 @@ import { SearchableSelect } from "./SearchableSelect";
 import { formatEntryDate } from "../lib/format";
 import { CardTypeBadge } from "./CardTypeBadge";
 import { getCardType } from "../lib/si-protocol";
+import {
+  isSettled,
+  mergePendingEdits,
+  saveErrorText,
+  shouldSyncField,
+  validateRunnerEdits,
+  type PendingEdits,
+  type RunnerEditError,
+  type RunnerEditValue,
+} from "../lib/runner-edits";
 
 function payModeLabel(payMode: number, t: (key: string) => string): string {
   const labels: Record<number, string> = {
@@ -50,6 +62,9 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
     utils.cardReadout.readoutByRunner.invalidate({ runnerId });
   };
 
+  const useEventorValueMutation = trpc.runner.useEventorValue.useMutation({
+    onSuccess: invalidateAll,
+  });
   const updateMutation = trpc.runner.update.useMutation({
     onSuccess: invalidateAll,
   });
@@ -70,30 +85,122 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
     onSuccess: invalidateAll,
   });
 
-  // Debounced save
-  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Pending edits (WEB-07): every field edited before the save fires goes in
+  // one map behind one 600 ms timer, so a fast tab from name to card number
+  // sends both. Blur, Enter, a select and closing the row flush at once. One
+  // save is in flight at a time; edits made meanwhile go in the next one.
+  const pendingRef = useRef<PendingEdits>({});
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inFlightRef = useRef(false);
+  const inFlightPromiseRef = useRef<Promise<void> | null>(null);
   const [saving, setSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<number>(0);
+  // A refused save (WEB-08) stays on screen until the next successful one.
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, RunnerEditError>>({});
+  // Bumped per field when the server refuses it: the input shows the stored value again.
+  const [resetEpochs, setResetEpochs] = useState<Record<string, number>>({});
 
-  const debouncedSave = useCallback(
-    (field: string, value: string | number) => {
-      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-      setSaving(true);
-      saveTimeoutRef.current = setTimeout(() => {
-        updateMutation.mutate(
-          { id: runnerId, data: { [field]: value } },
-          {
-            onSuccess: () => {
-              setSaving(false);
-              setLastSaved(Date.now());
-            },
-            onError: () => setSaving(false),
-          },
-        );
+  type UpdateData = NonNullable<Parameters<typeof updateMutation.mutate>[0]["data"]>;
+
+  const flush = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    if (inFlightRef.current) return; // onSettled sends what queued meanwhile
+    const { data, errors } = validateRunnerEdits(pendingRef.current);
+    pendingRef.current = {};
+    if (Object.keys(errors).length > 0) setFieldErrors((prev) => ({ ...prev, ...errors }));
+    const fields = Object.keys(data);
+    if (fields.length === 0) {
+      setSaving(false);
+      return;
+    }
+    inFlightRef.current = true;
+    setSaving(true);
+    // `mutateAsync`, not per-call callbacks: its promise settles even after
+    // the row closed, so the close-time save can wait for it (no reordering).
+    const p = updateMutation
+      .mutateAsync({ id: runnerId, data: data as UpdateData })
+      .then(
+        () => {
+          setSaveError(null);
+          setLastSaved(Date.now());
+        },
+        (err: unknown) => {
+          setSaveError(saveErrorText(err instanceof Error ? err.message : String(err)));
+          setLastSaved(0);
+          // Back to the stored value, except where newer text is already
+          // queued: that edit goes out next and must stay on screen.
+          // Read now: the updater runs at render, after `.finally` below
+          // may already have sent (and emptied) the queue.
+          const toReset = fields.filter((f) => !(f in pendingRef.current));
+          setResetEpochs((prev) => {
+            const next = { ...prev };
+            for (const f of toReset) next[f] = (next[f] ?? 0) + 1;
+            return next;
+          });
+          utils.runner.getById.invalidate({ id: runnerId });
+        },
+      )
+      .finally(() => {
+        inFlightRef.current = false;
+        if (inFlightPromiseRef.current === p) inFlightPromiseRef.current = null;
+        if (timerRef.current) return; // still typing: the timer flushes
+        if (Object.keys(pendingRef.current).length > 0) flushRef.current();
+        else setSaving(false);
+      });
+    inFlightPromiseRef.current = p;
+  };
+  const flushRef = useRef(flush);
+  useLayoutEffect(() => {
+    flushRef.current = flush;
+  });
+
+  /** Queue one field edit; `immediate` (selects, committed times) saves now. */
+  const edit = (field: string, value: RunnerEditValue, immediate = false) => {
+    pendingRef.current = mergePendingEdits(pendingRef.current, field, value);
+    setFieldErrors((prev) => {
+      if (!(field in prev)) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+    setSaving(true);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
+    if (immediate) flushRef.current();
+    else
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        flushRef.current();
       }, 600);
-    },
-    [runnerId, updateMutation],
-  );
+  };
+  const flushNow = () => flushRef.current();
+
+  // Closing the row (or leaving the page) must not drop a pending edit. The
+  // component is gone, so the save goes through the client directly; its
+  // result can no longer be shown in this pane.
+  const unmountFlush = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
+    const { data } = validateRunnerEdits(pendingRef.current);
+    pendingRef.current = {};
+    if (Object.keys(data).length === 0) return;
+    // After the save still in flight, so an older value cannot land last.
+    (inFlightPromiseRef.current ?? Promise.resolve())
+      .then(() => utils.client.runner.update.mutate({ id: runnerId, data: data as UpdateData }))
+      .then(invalidateAll, (err: unknown) => console.error("Runner edit not saved on close:", err));
+  };
+  const unmountFlushRef = useRef(unmountFlush);
+  useLayoutEffect(() => {
+    unmountFlushRef.current = unmountFlush;
+  });
+  useEffect(() => {
+    const ref = unmountFlushRef;
+    return () => ref.current();
+  }, []);
 
   if (runner.isLoading) {
     return (
@@ -111,6 +218,28 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
   if (!runner.data) return null;
 
   const r = runner.data;
+  const diffByField = new Map((r.eventorDiff ?? []).map((d) => [d.field, d]));
+  const marker = (field: RunnerEventorDiff["field"]) => {
+    const d = diffByField.get(field);
+    if (!d) return null;
+    return (
+      <EventorMarker
+        diff={d}
+        pending={useEventorValueMutation.isPending}
+        error={
+          useEventorValueMutation.isError && useEventorValueMutation.variables?.field === d.field
+            ? useEventorValueMutation.error.message
+            : null
+        }
+        onUse={() => useEventorValueMutation.mutate({ runnerId, field })}
+      />
+    );
+  };
+  // The three punch edits share one error line above the table: the latest
+  // punch edit's outcome, so a later success clears an earlier failure.
+  const punchError = [addPunchMutation, removePunchMutation, updatePunchTimeMutation]
+    .filter((m) => m.submittedAt > 0)
+    .sort((a, b) => b.submittedAt - a.submittedAt)[0]?.error;
   const runningTime =
     r.finishTime > 0 && r.startTime > 0 ? r.finishTime - r.startTime : 0;
 
@@ -126,36 +255,66 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
                 {t("saving")}
               </span>
             )}
-            {!saving && lastSaved > 0 && Date.now() - lastSaved < 3000 && (
-              <span className="text-xs text-emerald-600">{t("saved")}</span>
+            {!saving && !saveError && lastSaved > 0 && Date.now() - lastSaved < 3000 && (
+              <span className="text-xs text-emerald-600" data-testid="runner-saved">{t("saved")}</span>
             )}
           </div>
 
+          {r.goneFromEventor && (
+            <div
+              data-testid="eventor-gone-banner"
+              className="mb-3 px-3 py-1.5 rounded-md bg-sky-50 border border-sky-200 text-xs text-sky-800"
+            >
+              {t(r.status === RunnerStatus.Cancel ? "eventorGoneCancelledBanner" : "eventorGoneBanner")}
+            </div>
+          )}
+
+          {saveError && (
+            <p className="mb-2 text-xs text-red-600" role="alert" data-testid="runner-save-error">
+              {saveError}
+            </p>
+          )}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-3">
             {/* Editable fields */}
-            <EditField
-              label={t("name")}
-              value={r.name}
-              onChange={(v) => debouncedSave("name", v)}
-            />
-            <SelectField
-              label={t("class")}
-              runnerId={runnerId}
-              field="classId"
-              currentValue={r.classId}
-              debouncedSave={debouncedSave}
-            />
+            <div>
+              <EditField
+                label={t("name")}
+                testId="runner-name"
+                value={r.name}
+                onChange={(v) => edit("name", v)}
+                onCommit={flushNow}
+                resetEpoch={resetEpochs.name}
+                error={fieldErrors.name && t(fieldErrors.name)}
+              />
+              {marker("name")}
+            </div>
+            <div>
+              <SelectField
+                label={t("class")}
+                runnerId={runnerId}
+                field="classId"
+                currentValue={r.classId}
+                onSave={(field, v) => edit(field, v, true)}
+              />
+              {fieldErrors.classId && (
+                <p className="text-xs text-red-600 mt-0.5">{t(fieldErrors.classId)}</p>
+              )}
+              {marker("classId")}
+            </div>
             <VariantSelectField
               classId={r.classId}
               courseId={r.courseId}
-              onChange={(courseId) => updateMutation.mutate({ id: runnerId, courseId })}
+              onChange={(courseId) => edit("courseId", courseId, true)}
             />
-            <SelectClubField
-              label={t("club")}
-              runnerId={runnerId}
-              currentValue={r.clubId}
-              debouncedSave={debouncedSave}
-            />
+            <div>
+              <SelectClubField
+                label={t("club")}
+                runnerId={runnerId}
+                currentValue={r.clubId}
+                onSave={(field, v) => edit(field, v, true)}
+              />
+              {marker("club")}
+            </div>
             <div>
               <label className="flex items-center gap-1.5 text-xs text-slate-500 mb-1">
                 {t("siCard")}
@@ -163,22 +322,31 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
               </label>
               <EditField
                 label=""
+                testId="runner-card"
                 value={r.cardNo > 0 ? String(r.cardNo) : ""}
                 type="number"
-                onChange={(v) => debouncedSave("cardNo", parseInt(v, 10) || 0)}
+                onChange={(v) => edit("cardNo", parseInt(v, 10) || 0)}
+                onCommit={flushNow}
+                resetEpoch={resetEpochs.cardNo}
+                error={fieldErrors.cardNo && t(fieldErrors.cardNo)}
               />
+              {marker("cardNo")}
             </div>
-            <EditField
+            <TimeField
               label={t("startTime")}
-              value={r.startTime > 0 ? formatMeosTime(r.startTime) : ""}
-              placeholder="HH:MM:SS"
-              onChange={(v) => debouncedSave("startTime", parseMeosTime(v))}
+              testId="runner-start-time"
+              value={r.startTime}
+              invalidText={t("invalidClockTime")}
+              onCommit={(ds) => edit("startTime", ds, true)}
+              resetEpoch={resetEpochs.startTime}
             />
-            <EditField
+            <TimeField
               label={t("finishTime")}
-              value={r.finishTime > 0 ? formatMeosTime(r.finishTime) : ""}
-              placeholder="HH:MM:SS"
-              onChange={(v) => debouncedSave("finishTime", parseMeosTime(v))}
+              testId="runner-finish-time"
+              value={r.finishTime}
+              invalidText={t("invalidClockTime")}
+              onCommit={(ds) => edit("finishTime", ds, true)}
+              resetEpoch={resetEpochs.finishTime}
             />
             <ReadonlyField
               label={t("runningTime")}
@@ -189,7 +357,7 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
               <label className="block text-xs text-slate-500 mb-1">{t("status")}</label>
               <StatusSelect
                 value={r.status}
-                onChange={(v) => debouncedSave("status", v)}
+                onChange={(v) => edit("status", v, true)}
               />
               {r.transferFlags > 0 && (
                 <div className="flex gap-1 mt-1">
@@ -207,37 +375,49 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
             </div>
             <EditField
               label={t("bib")}
+              testId="runner-bib"
               value={r.bib}
-              onChange={(v) => debouncedSave("bib", v)}
+              onChange={(v) => edit("bib", v)}
+              onCommit={flushNow}
+              resetEpoch={resetEpochs.bib}
               className="hidden sm:block"
             />
-            <EditField
-              label={t("birthYear")}
-              value={r.birthYear > 0 ? String(r.birthYear) : ""}
-              type="number"
-              onChange={(v) =>
-                debouncedSave("birthYear", parseInt(v, 10) || 0)
-              }
-              className="hidden sm:block"
-            />
+            <div className="hidden sm:block">
+              <EditField
+                label={t("birthYear")}
+                value={r.birthYear > 0 ? String(r.birthYear) : ""}
+                type="number"
+                onChange={(v) => edit("birthYear", parseInt(v, 10) || 0)}
+                onCommit={flushNow}
+                resetEpoch={resetEpochs.birthYear}
+              />
+              {marker("birthYear")}
+            </div>
             <div className="hidden sm:block">
               <label className="block text-xs text-slate-500 mb-1">{t("sex")}</label>
               <SexSelect
                 value={r.sex}
-                onChange={(v) => debouncedSave("sex", v)}
+                onChange={(v) => edit("sex", v, true)}
               />
+              {marker("sex")}
             </div>
-            <EditField
-              label={t("nationality")}
-              value={r.nationality}
-              onChange={(v) => debouncedSave("nationality", v)}
-              placeholder="e.g. SWE"
-              className="hidden sm:block"
-            />
+            <div className="hidden sm:block">
+              <EditField
+                label={t("nationality")}
+                value={r.nationality}
+                onChange={(v) => edit("nationality", v)}
+                onCommit={flushNow}
+                resetEpoch={resetEpochs.nationality}
+                placeholder="e.g. SWE"
+              />
+              {marker("nationality")}
+            </div>
             <EditField
               label={t("phone")}
               value={r.phone}
-              onChange={(v) => debouncedSave("phone", v)}
+              onChange={(v) => edit("phone", v)}
+              onCommit={flushNow}
+              resetEpoch={resetEpochs.phone}
               className="hidden sm:block"
             />
             {r.entryDate > 0 && (
@@ -287,6 +467,11 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
                     {r.cardReturned ? t("markNotReturned") : t("markReturned")}
                   </button>
                 </div>
+                {setCardReturnedMutation.error && (
+                  <p className="text-xs text-red-600" role="alert" data-testid="card-returned-error">
+                    {saveErrorText(setCardReturnedMutation.error.message)}
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -305,6 +490,11 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
           {/* Punch data (editable) */}
           {readout.data?.controls && readout.data.controls.length > 0 && (
             <div className="mt-4 pt-4 border-t border-blue-100">
+              {punchError && (
+                <p className="mb-2 text-xs text-red-600" role="alert" data-testid="runner-punch-error">
+                  {saveErrorText(punchError.message)}
+                </p>
+              )}
               <PunchTable
                 data={{
                   controls: readout.data.controls,
@@ -331,18 +521,8 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
                     time: newTime,
                   });
                 }}
-                onUpdateStartTime={(time) => {
-                  updateMutation.mutate(
-                    { id: runnerId, data: { startTime: time } },
-                    { onSuccess: invalidateAll },
-                  );
-                }}
-                onUpdateFinishTime={(time) => {
-                  updateMutation.mutate(
-                    { id: runnerId, data: { finishTime: time } },
-                    { onSuccess: invalidateAll },
-                  );
-                }}
+                onUpdateStartTime={(time) => edit("startTime", time, true)}
+                onUpdateFinishTime={(time) => edit("finishTime", time, true)}
               />
 
               {/* The full per-runner map (course + punch status colours
@@ -357,32 +537,60 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
   );
 }
 
+/**
+ * A text or number field of the runner editor (WEB-07, WEB-08). Typing
+ * queues the edit (`onChange`); blur and Enter save it at once (`onCommit`).
+ * The stored value from props is taken over only while the field has no
+ * focus and no text that is not yet stored, so the refetch after an earlier
+ * save cannot rewrite what is being typed. `resetEpoch` changes when the
+ * server refused the field: the input shows the stored value again.
+ */
 function EditField({
   label,
   value,
   type = "text",
   placeholder,
   onChange,
+  onCommit,
+  resetEpoch = 0,
+  error,
+  testId,
   className = "",
 }: {
   label: string;
   value: string;
-  type?: string;
+  type?: "text" | "number";
   placeholder?: string;
   onChange: (value: string) => void;
+  onCommit: () => void;
+  resetEpoch?: number;
+  error?: string;
+  testId?: string;
   className?: string;
 }) {
   const [localValue, setLocalValue] = useState(value);
+  const [focused, setFocused] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const valueRef = useRef(value);
+  useLayoutEffect(() => {
+    valueRef.current = value;
+  });
 
-  // Sync external changes
+  // The stored value caught up with the text: nothing is pending any more.
   useEffect(() => {
-    setLocalValue(value);
-  }, [value]);
+    if (dirty && isSettled(localValue, value, type)) setDirty(false);
+  }, [dirty, localValue, value, type]);
 
-  const handleChange = (newVal: string) => {
-    setLocalValue(newVal);
-    onChange(newVal);
-  };
+  useEffect(() => {
+    if (shouldSyncField({ focused, dirty })) setLocalValue(value);
+  }, [value, focused, dirty]);
+
+  // A refused save: back to the stored value, focused or not.
+  useEffect(() => {
+    if (resetEpoch === 0) return;
+    setLocalValue(valueRef.current);
+    setDirty(false);
+  }, [resetEpoch]);
 
   return (
     <div className={className}>
@@ -390,10 +598,132 @@ function EditField({
       <input
         type={type}
         value={localValue}
-        onChange={(e) => handleChange(e.target.value)}
+        data-testid={testId}
+        aria-invalid={error ? true : undefined}
+        onChange={(e) => {
+          setLocalValue(e.target.value);
+          setDirty(true);
+          onChange(e.target.value);
+        }}
+        onFocus={() => setFocused(true)}
+        onBlur={() => {
+          setFocused(false);
+          onCommit();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") onCommit();
+        }}
         placeholder={placeholder}
-        className="w-full px-2 py-1.5 text-sm border border-slate-200 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+        className={`w-full px-2 py-1.5 text-sm border rounded-md bg-white focus:outline-none focus:ring-2 focus:border-transparent ${
+          error ? "border-red-400 focus:ring-red-400" : "border-slate-200 focus:ring-blue-400"
+        }`}
       />
+      {error && <p className="text-xs text-red-600 mt-0.5">{error}</p>}
+    </div>
+  );
+}
+
+/**
+ * A clock-time field (RES-13): saved on blur or Enter, never per keystroke,
+ * and only when it parses (`H:MM`, `H:MM:SS`, `HH.MM.SS`, `HHMMSS`). An
+ * empty field clears the time; anything else is shown in red and not saved,
+ * so a half-typed "10:4" can no longer be stored as 00:10:04.
+ */
+export function TimeField({
+  label,
+  value,
+  onCommit,
+  invalidText,
+  testId,
+  resetEpoch = 0,
+}: {
+  label: string;
+  /** Absolute deciseconds; 0 = no time. */
+  value: number;
+  onCommit: (ds: number) => void;
+  invalidText: string;
+  testId?: string;
+  /** Changes when the server refused this time: show the stored one again. */
+  resetEpoch?: number;
+}) {
+  const shown = value > 0 ? formatMeosTime(value) : "";
+  const [text, setText] = useState(shown);
+  const [editing, setEditing] = useState(false);
+  const [invalid, setInvalid] = useState(false);
+
+  // Follow the stored value, but never rewrite the field while it is edited.
+  useEffect(() => {
+    if (!editing) {
+      setText(shown);
+      setInvalid(false);
+    }
+  }, [shown, editing]);
+
+  const shownRef = useRef(shown);
+  useLayoutEffect(() => {
+    shownRef.current = shown;
+  });
+  const editingRef = useRef(editing);
+  useLayoutEffect(() => {
+    editingRef.current = editing;
+  });
+  useEffect(() => {
+    // Not while the field is being typed in again: that text is newer.
+    if (resetEpoch === 0 || editingRef.current) return;
+    setText(shownRef.current);
+    setInvalid(false);
+  }, [resetEpoch]);
+
+  const commit = () => {
+    const trimmed = text.trim();
+    // Tabbing through changes nothing (a stored time with tenths would
+    // otherwise be truncated to whole seconds and journaled).
+    if (trimmed === shown) {
+      setEditing(false);
+      setInvalid(false);
+      return;
+    }
+    const parsed = trimmed === "" ? 0 : parseClockTime(trimmed);
+    // 00:00:00 is "no time" in the API: only an empty field clears.
+    const ds = trimmed !== "" && parsed === 0 ? null : parsed;
+    if (ds === null) {
+      setInvalid(true);
+      return;
+    }
+    setInvalid(false);
+    setEditing(false);
+    if (ds !== value) onCommit(ds);
+    else setText(shown);
+  };
+
+  return (
+    <div>
+      <label className="block text-xs text-slate-500 mb-1">{label}</label>
+      <input
+        type="text"
+        value={text}
+        data-testid={testId}
+        aria-invalid={invalid || undefined}
+        placeholder="HH:MM:SS"
+        onFocus={() => setEditing(true)}
+        onChange={(e) => {
+          setText(e.target.value);
+          setInvalid(false);
+        }}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") {
+            setEditing(false);
+            setText(shown);
+            setInvalid(false);
+          }
+        }}
+        className={`w-full px-2 py-1.5 text-sm border rounded-md bg-white focus:outline-none focus:ring-2 focus:border-transparent tabular-nums ${
+          invalid ? "border-red-400 focus:ring-red-400" : "border-slate-200 focus:ring-blue-400"
+        }`}
+      />
+      {invalid && <p className="text-xs text-red-600 mt-0.5">{invalidText}</p>}
     </div>
   );
 }
@@ -450,13 +780,13 @@ function SelectField({
   label,
   field,
   currentValue,
-  debouncedSave,
+  onSave,
 }: {
   label: string;
   runnerId: number;
   field: string;
   currentValue: number;
-  debouncedSave: (field: string, value: number) => void;
+  onSave: (field: string, value: number) => void;
 }) {
   const { t } = useTranslation("runners");
   const dashboard = trpc.competition.dashboard.useQuery();
@@ -465,11 +795,16 @@ function SelectField({
       <label className="block text-xs text-slate-500 mb-1">{label}</label>
       <SearchableSelect
         value={currentValue}
-        onChange={(v) => debouncedSave(field, Number(v))}
+        onChange={(v) => {
+          // Re-picking "-" for a runner without a class changes nothing.
+          if (Number(v) === 0 && currentValue === 0) return;
+          onSave(field, Number(v));
+        }}
         placeholder="-"
         searchPlaceholder={t("searchClasses")}
         options={[
-          { value: 0, label: "-" },
+          // A runner needs a class (WEB-08): "-" only while none is set.
+          ...(currentValue > 0 ? [] : [{ value: 0, label: "-" }]),
           ...(dashboard.data?.classes.map((c) => ({
             value: c.id,
             label: c.name,
@@ -572,12 +907,12 @@ function StatusSelect({
 function SelectClubField({
   label,
   currentValue,
-  debouncedSave,
+  onSave,
 }: {
   label: string;
   runnerId: number;
   currentValue: number;
-  debouncedSave: (field: string, value: number) => void;
+  onSave: (field: string, value: number) => void;
 }) {
   const { t } = useTranslation("runners");
   const clubs = trpc.competition.clubs.useQuery();
@@ -586,7 +921,7 @@ function SelectClubField({
       <label className="block text-xs text-slate-500 mb-1">{label}</label>
       <SearchableSelect
         value={currentValue}
-        onChange={(v) => debouncedSave("clubId", Number(v))}
+        onChange={(v) => onSave("clubId", Number(v))}
         placeholder={t("noClub")}
         searchPlaceholder={t("searchClubs")}
         options={[

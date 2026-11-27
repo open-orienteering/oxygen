@@ -73,6 +73,10 @@ export default defineConfig({
     baseURL: `http://127.0.0.1:${WEB_PORT}`,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
+    // The browser at the venue is in Sweden, the API (as in the Docker and
+    // Cloud Run images) in UTC: a time-zone mix-up between them fails the
+    // suite instead of passing only because both sides are UTC (BLD-14).
+    timezoneId: "Europe/Stockholm",
     extraHTTPHeaders: {
       "x-forwarded-email": "e2e-admin@oxygen.test",
     },
@@ -116,6 +120,7 @@ export default defineConfig({
         // clobber each other.
         DATABASE_URL,
         PORT: String(API_PORT),
+        TZ: "UTC",
         // Lets lease.spec.ts drive the node-to-node lease surface
         // (lease.acquire) the way a peer node would.
         SYNC_SHARED_SECRET: "e2e-sync-secret",
@@ -123,6 +128,9 @@ export default defineConfig({
         // depends on eventor.orientering.se being up and on it accepting
         // the placeholder key, neither of which holds.
         EVENTOR_API_BASE_URL: `http://127.0.0.1:${EVENTOR_PORT}/`,
+        // Short upload deadline so eventor-push.spec.ts can stall the stub
+        // and see the "outcome unknown" notice without waiting a minute.
+        EVENTOR_UPLOAD_TIMEOUT_MS: "2000",
         // No DEM request leaves the stack, even with a provider switched on in
         // Settings → Height data (docs/map-terrain.md §7.8 "Offline stacks").
         MAP_DEM_OFFLINE: "1",

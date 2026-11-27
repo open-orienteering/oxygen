@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { formatMeosTime, formatRunningTime, parseMeosTime, type ControlMatch as SharedControlMatch } from "@oxygen/shared";
+import { formatMeosTime, formatRunningTime, parseClockTime, type ControlMatch as SharedControlMatch } from "@oxygen/shared";
 
 // PunchTable consumes the canonical ControlMatch shape from @oxygen/shared,
 // which now carries `positionMode` (required / skipped / noTiming) and
@@ -370,10 +370,10 @@ function ControlRow({
 
   const saveTime = () => {
     if (!ctrl.freePunchId || !onUpdatePunchTime) return;
-    const newTime = parseMeosTime(timeInput);
-    if (newTime > 0) {
-      onUpdatePunchTime(ctrl.freePunchId, newTime);
-    }
+    // Strict clock time (RES-13): an invalid value keeps the editor open.
+    const newTime = parseClockTime(timeInput);
+    if (newTime === null || newTime <= 0) return;
+    onUpdatePunchTime(ctrl.freePunchId, newTime);
     setEditingTime(false);
   };
 
@@ -629,7 +629,9 @@ function TimingRow({
 
   const saveTime = () => {
     if (!onUpdateTime) return;
-    const newTime = parseMeosTime(timeInput);
+    // Strict clock time (RES-13): empty clears, invalid keeps the editor open.
+    const newTime = timeInput.trim() === "" ? 0 : parseClockTime(timeInput);
+    if (newTime === null) return;
     onUpdateTime(newTime);
     setEditing(false);
   };
@@ -744,8 +746,8 @@ function AddPunchForm({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const code = parseInt(controlCode, 10);
-    const time = parseMeosTime(timeStr);
-    if (isNaN(code) || code <= 0 || time <= 0) return;
+    const time = parseClockTime(timeStr);
+    if (isNaN(code) || code <= 0 || time === null || time <= 0) return;
     setAdding(true);
     onAdd(code, time);
     setControlCode("");

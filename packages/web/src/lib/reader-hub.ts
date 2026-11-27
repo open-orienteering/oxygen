@@ -8,6 +8,7 @@
  *   si:card-readout     detail: the reader's SICardReadout, untouched
  *   si:card-detected    detail: { ...SICardDetection, readerId }
  *   si:card-removed     detail: { readerId }
+ *   si:card-read-failed detail: { ...SICardReadFailure, readerId }
  *   si:status           detail: { status: aggregate, readerId, readerStatus }
  *   hub:readers-changed detail: ReaderInfo[] (on any add/remove/status/info change)
  *
@@ -79,6 +80,13 @@ export class ReaderHub extends EventTarget {
         new CustomEvent("si:card-removed", { detail: { readerId: reader.id } }),
       );
     };
+    const onReadFailed = (e: Event) => {
+      this.dispatchEvent(
+        new CustomEvent("si:card-read-failed", {
+          detail: { ...(e as CustomEvent).detail, readerId: reader.id },
+        }),
+      );
+    };
     const onReadout = (e: Event) => {
       this.lastCardAt.set(reader.id, Date.now());
       this.dispatchEvent(
@@ -94,12 +102,14 @@ export class ReaderHub extends EventTarget {
     reader.addEventListener("si:card-detected", onDetected);
     reader.addEventListener("si:card-removed", onRemoved);
     reader.addEventListener("si:card-readout", onReadout);
+    reader.addEventListener("si:card-read-failed", onReadFailed);
     reader.addEventListener("si:reader-info", onInfo);
     this.unwire.set(reader.id, () => {
       reader.removeEventListener("si:status", onStatus);
       reader.removeEventListener("si:card-detected", onDetected);
       reader.removeEventListener("si:card-removed", onRemoved);
       reader.removeEventListener("si:card-readout", onReadout);
+      reader.removeEventListener("si:card-read-failed", onReadFailed);
       reader.removeEventListener("si:reader-info", onInfo);
     });
     this.changed();

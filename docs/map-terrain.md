@@ -201,10 +201,18 @@ measured with them.
 ### 2.3 Mapped-area mask
 
 The mapped area is where the map says something about the terrain. Every
-part in `extentParts` is drawn into a grid of **0.5 mm** cells over the
-contour pieces' bounding box padded by 4 mm + 3 cells (5.5 mm); what lies
-beyond that grid is not drawn, so the mapped area never reaches more than
-5.5 mm past the outermost contour. The drawn cells are closed with radius
+part in `extentParts` is drawn into a grid of cells over the contour
+pieces' bounding box padded by 4 mm + 3 cells, rounded up to whole cells;
+the cell is **max(0.5 mm, sqrt(area / 8 M))** for the box padded at
+the default (5.5 mm) and grown by 1 % steps until the grid holds at most
+8 million cells (`MASK_MAX_CELLS`), so a stray far-away contour piece makes
+the mask coarser instead of exhausting memory (an ordinary map keeps 0.5 mm
+and is byte-identical). A map whose padded contour box exceeds
+**2 m² of paper (2,000,000 mm²)** is the exception: its mask is coarser than
+before, **without a `TERRAIN_VERSION` bump**, so cached height fields are not
+re-derived and keep the old mask until their next derive. What lies beyond that grid is not drawn, so the
+mapped area never reaches more than 5.5 mm (at 0.5 mm cells) past the
+outermost contour. The drawn cells are closed with radius
 **4 mm** (3-4 chamfer distance: dilate, fill everything not reachable from
 the grid border, erode). `maskAt(mask, x, y)` is true inside. The mask is
 coarse on purpose: it says where the frame of the mapped terrain is, not
@@ -875,7 +883,7 @@ interface HeightFieldHeader {
   source: "contours" | string; // or a DEM source matching DEM_FIELD_SOURCE_RE (§7.0 answer 3)
   cellMm: number; x0: number; y0: number; width: number; height: number;  // §2's Grid, y up
   groundMPerMm: number;
-  intervalM: number;        // 5, or 2.5 for ISSprOM (answer 8)
+  intervalM: number;        // the assumed interval: 5, or 2.5 for ISSprOM (answer 8); a confirmed one scales readers' heights (course-elevation.md §3)
   zScaleM: number;          // metres per unit: intervalM / 64
   zOffsetM: number;         // metres = z · zScaleM + zOffsetM
   datum: "relative" | "absolute";
@@ -1054,8 +1062,13 @@ pure; the provider, the fetch and the paper → projected transform are
    (answer 8's assumed 5 m / 2.5 m); the report carries R at I and I/2,
    globally and within each ladder, and `intervalSuspect` (§6.5). This
    narrows answer 8's "H9 measures it": a scan would pick 2.5 m on both
-   full club maps, whose two ladders sit half an interval apart. The
-   per-map override stays later.
+   full club maps, whose two ladders sit half an interval apart. (Review
+   package 23, D7, `course-elevation.md` §0.43: the interval is still
+   never changed *in the field* — it is derived at the assumed interval
+   and `TERRAIN_VERSION` is unchanged — but a person confirms it per
+   map, and readers of climb scale the relative field's heights by
+   confirmed / assumed; the 3D view, the DEM anchor's level vote and the
+   pick's `heightM` keep the assumed one, `bugfixes/course-elevation-followups.md` F3.)
 3. **A ladder area is spatial**, and the corpus target is read per area:
    on club-2026, ≥ 94 % of snapped index-contour length lies on its
    area's modal residue (mod 5), **and** snapped index length is ≥ 80 % of
@@ -1148,7 +1161,8 @@ R(I), R(I/2), the global phase at I, the number of contributors, and per
 ladder (§6.6) R(I) over its members. **Promotion**: a coarse DEM is
 promoted when R(I) ≥ 0.6. **`intervalSuspect`** is set when R(I/2) ≥ 0.6
 and less than half of the contributors' length is labelled by §6.6's
-vote — two phases half an interval apart mixed everywhere, which is what
+vote (shown as an amber warning in the editor's map info dialog; it is
+never a source of the interval, `course-elevation.md` §0.43) — two phases half an interval apart mixed everywhere, which is what
 a true interval of I/2 looks like (two ladders in separate places are
 labelled, so a two-ladder map is not suspect).
 
@@ -1851,7 +1865,7 @@ the aggregates and the time; the state list with a retry per row.
 | `terrain/graph/__tests__/inputs.test.ts` | classification by canonical id in any match state, hidden skipped, tagged / untagged cliff and tag side, tick angle (§1.1–1.3) |
 | `terrain/graph/__tests__/flatten.test.ts` | Bézier chords, hole rings, malformed control run (§1.4) |
 | `terrain/graph/__tests__/chains.test.ts` | §2.1–2.2 |
-| `terrain/graph/__tests__/raster.test.ts` | mask (closing, the 5.5 mm grid), nested rings → regions, frame ends close a band, near-miss ends `extended` onto a chain and a cliff, chains over cliffs, cell budget (§2.3–2.5) |
+| `terrain/graph/__tests__/raster.test.ts` | mask (closing, the 5.5 mm grid, the 8 M-cell budget), nested rings → regions, frame ends close a band, near-miss ends `extended` onto a chain and a cliff, chains over cliffs, cell budget (§2.3–2.5) |
 | `terrain/graph/__tests__/graph.test.ts` | incidence on nested rings, a leaky chain, cliff links, determinism, no contours (§2.6–2.7) |
 | `terrain/graph/__tests__/synthetic.ts` | the fixture: ISOM symbols with canonical matches and library definitions, geometry in mm, a mapped area around the contours |
 | `.local/h1/counts.mts` (not committed) | T1's corpus counts reproduced (§2.8) |
@@ -1894,6 +1908,10 @@ the aggregates and the time; the state list with a retry per row.
 
 ## Pending in this chapter
 
+- §2.3: the mask's box is the plain bounding box of the contour pieces, not a
+  robust one that ignores outlier pieces (a robust box changes §2.3/2.4
+  results and needs a `TERRAIN_VERSION` bump); and a coarsened mask carries no
+  warning in the report. No row.
 - §3: bands that span two levels are only demoted in the level forest,
   not split; splitting them (H1's raster) is what would lift the levels
   further (§3.0, 4). No row yet.

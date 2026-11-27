@@ -130,3 +130,45 @@ test.describe("Invalid Navigation", () => {
     await expect(page.getByRole("heading", { name: "Oxygen" })).toBeVisible({ timeout: 10000 });
   });
 });
+
+test.describe("Page errors stay inside the page (WEB-15)", () => {
+  test("a page that throws keeps the shell, and another tab renders again", async ({ page }) => {
+    // Serve the Clubs page module as one whose component throws on render.
+    await page.route(/\/src\/pages\/ClubsPage\.tsx(\?.*)?$/, (route) =>
+      route.fulfill({
+        contentType: "application/javascript",
+        body: 'export function ClubsPage() { throw new Error("E2E page boom"); }',
+      }),
+    );
+    await selectCompetition(page, MAIN_COMPETITION);
+    await page.goto("/itest/clubs");
+
+    await expect(page.getByTestId("error-boundary")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId("error-boundary")).toContainText("E2E page boom");
+    // The shell survives: header with the event name and the tabs.
+    await expect(page.locator("header").getByText(MAIN_COMPETITION)).toBeVisible();
+    await expect(page.locator("nav[aria-label='Tabs']")).toBeVisible();
+
+    // Another tab resets the boundary and renders.
+    await clickTab(page, "Runners");
+    await expect(page.getByTestId("error-boundary")).toHaveCount(0);
+    await expect(page.locator("table")).toBeVisible({ timeout: 10000 });
+  });
+
+  test("a page chunk that cannot be loaded offers a reload, not a dead Try again", async ({ page }) => {
+    await page.route(/\/src\/pages\/ClubsPage\.tsx(\?.*)?$/, (route) => route.abort("failed"));
+    await selectCompetition(page, MAIN_COMPETITION);
+    await page.goto("/itest/clubs");
+    const boundary = page.getByTestId("error-boundary");
+    await expect(boundary).toBeVisible({ timeout: 10000 });
+    await expect(boundary).toHaveAttribute("data-chunk-error", "1");
+    await expect(page.getByTestId("error-boundary-retry")).toHaveText("Reload");
+    await expect(page.locator("header").getByText(MAIN_COMPETITION)).toBeVisible();
+
+    // The connection is back: Reload loads the page.
+    await page.unroute(/\/src\/pages\/ClubsPage\.tsx(\?.*)?$/);
+    await page.getByTestId("error-boundary-retry").click();
+    await expect(page.getByTestId("error-boundary")).toHaveCount(0, { timeout: 15000 });
+    await expect(page.locator("header").getByText(MAIN_COMPETITION)).toBeVisible({ timeout: 15000 });
+  });
+});

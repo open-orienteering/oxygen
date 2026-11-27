@@ -32,7 +32,7 @@ export const CLOUD_OWNED_MUTATION_PREFIXES: readonly string[] = [
   "mapTrack.",
 ];
 
-/** Exact cloud-owned mutation paths (event lifecycle is cloud admin). */
+/** Exact cloud-owned mutation paths (event lifecycle is cloud admin, plus single event-row settings). */
 export const CLOUD_OWNED_MUTATIONS: ReadonlySet<string> = new Set([
   "event.create",
   "event.delete",
@@ -40,6 +40,15 @@ export const CLOUD_OWNED_MUTATIONS: ReadonlySet<string> = new Set([
   "competition.create",
   "competition.delete",
   "competition.purgeDeleted",
+  // Cloud-owned columns of the event row (review MC-08;
+  // docs/system/offline-architecture.md "The event row during a lease").
+  "event.updateType",
+  "event.setTestEvent",
+  "competition.updateType",
+  "competition.setTestEvent",
+  "course.setOverprintCuts",
+  // The map's contour interval lives on the map rows the cloud owns (docs/course-elevation.md §0.43).
+  "course.setContourInterval",
 ]);
 
 /** True when a tRPC procedure path is a cloud-owned mutation. */

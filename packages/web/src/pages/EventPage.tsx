@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import type { EventInfo, EventKind } from "@oxygen/shared";
+import { formatMeosTime, parseClockTime, isValidTimeZone } from "@oxygen/shared";
 import { trpc } from "../lib/trpc";
 import {
   EVENT_KIND_OPTIONS,
@@ -15,6 +16,7 @@ import { VenueLeasePanel } from "../components/VenueLease";
 import { PermissionsPanel } from "../components/PermissionsPanel";
 import { useCapabilities } from "../context/CapabilitiesContext";
 import { downloadSameOriginFile } from "../lib/download-api";
+import { SyncCounts } from "../components/EventorSyncCounts";
 
 export function EventPage() {
   const { t } = useTranslation("event");
@@ -74,6 +76,12 @@ export function EventPage() {
                 event={d.event}
                 canManage={canManage}
               />
+              <TestEventSwitch
+                key={`test-${d.event.nameId}`}
+                event={d.event}
+                canManage={canManage}
+              />
+              <EventTimeSettings key={`time-${d.event.nameId}`} canManage={canManage} />
               <div className="mt-3">
                 <RegistrationTrendsLink />
               </div>
@@ -98,6 +106,7 @@ export function EventPage() {
           {/* Eventor Sync */}
           {syncStatus.data?.linked && (
             <EventorSyncPanel
+              nameId={d.competition.nameId}
               eventorEventId={syncStatus.data.eventorEventId}
               lastSync={syncStatus.data.lastSync}
               apiKeyConfigured={syncStatus.data.apiKeyConfigured}
@@ -110,7 +119,7 @@ export function EventPage() {
           )}
 
           {/* Global Runner Database */}
-          {syncStatus.data?.apiKeyConfigured && (
+          {canManage && syncStatus.data?.apiKeyConfigured && (
             <RunnerDbPanel env={syncStatus.data.env} />
           )}
 
@@ -244,6 +253,169 @@ function EventTypeEditor({
   );
 }
 
+// ─── Test event mark (API-06) ───────────────────────────────
+
+function TestEventSwitch({ event, canManage }: { event: EventInfo; canManage: boolean }) {
+  const { t } = useTranslation("event");
+  const utils = trpc.useUtils();
+  const setTestEvent = trpc.event.setTestEvent.useMutation({
+    onSuccess: async () => {
+      await Promise.all([
+        utils.event.list.invalidate(),
+        utils.event.dashboard.invalidate(),
+        utils.competition.dashboard.invalidate(),
+      ]);
+    },
+  });
+  const on = event.isTestEvent;
+  return (
+    <div className="mt-3 max-w-md" data-testid="test-event-section">
+      <label className="flex items-center gap-2 text-sm text-slate-700">
+        <input
+          type="checkbox"
+          role="switch"
+          data-testid="test-event-switch"
+          checked={on}
+          disabled={!canManage || setTestEvent.isPending}
+          onChange={() => {
+            if (window.confirm(on ? t("testEventDisableConfirm") : t("testEventEnableConfirm"))) {
+              setTestEvent.mutate({ enabled: !on });
+            }
+          }}
+          className="h-4 w-4 cursor-pointer"
+        />
+        <span className="font-medium">{t("testEvent")}</span>
+      </label>
+      <p className="mt-1 text-xs text-slate-400">{t("testEventHelp")}</p>
+      {setTestEvent.isError && (
+        <p className="mt-1 text-xs text-red-600" data-testid="test-event-error">
+          {t("testEventFailed", { message: setTestEvent.error.message })}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ─── Zero time and time zone (RES-04, RES-06) ───────────────
+
+/** HH:MM:SS, with 00:00:00 for midnight (`formatMeosTime` prints "-" for 0). */
+function formatClock(ds: number): string {
+  return ds > 0 ? formatMeosTime(ds) : "00:00:00";
+}
+
+function timeZoneOptions(): string[] {
+  try {
+    return (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.("timeZone") ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function EventTimeSettings({ canManage }: { canManage: boolean }) {
+  const { t } = useTranslation("event");
+  const utils = trpc.useUtils();
+  const settings = trpc.event.getTimeSettings.useQuery();
+  const [zeroText, setZeroText] = useState<string | null>(null);
+  const [zone, setZone] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const save = trpc.event.setTimeSettings.useMutation({
+    onSuccess: async () => {
+      setSaved(true);
+      setZeroText(null);
+      setZone(null);
+      await Promise.all([
+        utils.event.getTimeSettings.invalidate(),
+        utils.event.dashboard.invalidate(),
+        utils.draw.defaults.invalidate(),
+        utils.runner.list.invalidate(),
+      ]);
+    },
+  });
+  const zones = useMemo(timeZoneOptions, []);
+
+  if (!settings.data) return null;
+  const s = settings.data;
+  const zeroShown = zeroText ?? formatClock(s.zeroTime);
+  const zoneShown = zone ?? s.timeZone;
+  // A locked zero time is not edited, so it never blocks saving the zone.
+  const zeroDs = s.zeroTimeLocked ? s.zeroTime : parseClockTime(zeroShown);
+  const zoneValid = isValidTimeZone(zoneShown.trim());
+  const dirty = (zeroDs !== null && zeroDs !== s.zeroTime) || zoneShown.trim() !== s.timeZone;
+
+  if (!canManage) {
+    return (
+      <div className="mt-3 text-sm text-slate-600" data-testid="event-time-settings">
+        <span className="font-medium">{t("zeroTime")}:</span> {formatClock(s.zeroTime)} ·{" "}
+        <span className="font-medium">{t("timeZone")}:</span> {s.timeZone}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 max-w-md" data-testid="event-time-settings">
+      <div className="flex flex-col sm:flex-row gap-2 items-end">
+        <div className="flex-1">
+          <label className="block text-xs font-medium text-slate-500 mb-1">{t("zeroTime")}</label>
+          <input
+            type="text"
+            data-testid="event-zero-time"
+            value={zeroShown}
+            disabled={s.zeroTimeLocked}
+            onChange={(e) => {
+              setZeroText(e.target.value);
+              setSaved(false);
+            }}
+            aria-invalid={zeroDs === null || undefined}
+            className={`w-full px-3 py-2 border rounded-lg text-sm tabular-nums focus:outline-none focus:ring-2 disabled:bg-slate-50 disabled:text-slate-500 ${
+              zeroDs === null ? "border-red-400 focus:ring-red-400" : "border-slate-200 focus:ring-blue-500"
+            }`}
+          />
+        </div>
+        <div className="flex-1">
+          <label className="block text-xs font-medium text-slate-500 mb-1">{t("timeZone")}</label>
+          <input
+            type="text"
+            list="event-time-zones"
+            data-testid="event-time-zone"
+            value={zoneShown}
+            onChange={(e) => {
+              setZone(e.target.value);
+              setSaved(false);
+            }}
+            aria-invalid={!zoneValid || undefined}
+            className={`w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 ${
+              zoneValid ? "border-slate-200 focus:ring-blue-500" : "border-red-400 focus:ring-red-400"
+            }`}
+          />
+          <datalist id="event-time-zones">
+            {zones.map((z) => (
+              <option key={z} value={z} />
+            ))}
+          </datalist>
+        </div>
+        <button
+          type="button"
+          data-testid="event-time-save"
+          disabled={save.isPending || !dirty || zeroDs === null || !zoneValid}
+          onClick={() => zeroDs !== null && save.mutate({ zeroTime: zeroDs, timeZone: zoneShown.trim() })}
+          className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 cursor-pointer"
+        >
+          {save.isPending ? t("saving") : t("save")}
+        </button>
+      </div>
+      <p className="mt-1 text-xs text-slate-400">
+        {s.zeroTimeLocked ? t("zeroTimeLockedHelp") : t("zeroTimeHelp")}
+      </p>
+      {saved && <p className="mt-1 text-xs text-green-600">{t("timeSettingsSaved")}</p>}
+      {save.isError && (
+        <p className="mt-1 text-xs text-red-600" role="alert">
+          {save.error.message.replace(/^[A-Z_]+: /, "")}
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ─── Registration Trends Link ───────────────────────────────
 
 function RegistrationTrendsLink() {
@@ -335,13 +507,40 @@ function SyncRow({ icon, label, detail }: { icon: string; label: string; detail:
 
 // ─── Eventor Sync Panel ─────────────────────────────────────
 
+/** The push's "send course length and climb" choice, kept per browser and event (docs/course-elevation.md §8). */
+function useIncludeCourse(nameId: string): [boolean, (v: boolean) => void] {
+  const key = `oxygen:eventor-include-course:${nameId}`;
+  const read = () => {
+    try {
+      return window.localStorage.getItem(key) !== "0";
+    } catch {
+      return true;
+    }
+  };
+  const [value, setValue] = useState(read);
+  useEffect(() => setValue(read()), [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  return [
+    value,
+    (v) => {
+      setValue(v);
+      try {
+        window.localStorage.setItem(key, v ? "1" : "0");
+      } catch {
+        // Not remembered; the choice still holds for this page.
+      }
+    },
+  ];
+}
+
 function EventorSyncPanel({
+  nameId,
   eventorEventId,
   lastSync,
   apiKeyConfigured,
   env,
   onSynced,
 }: {
+  nameId: string;
   eventorEventId: number;
   lastSync: string | null;
   apiKeyConfigured: boolean;
@@ -350,11 +549,44 @@ function EventorSyncPanel({
 }) {
   const { t } = useTranslation("event");
   const timeAgo = useTimeAgo();
+  // The sync is previewed first (dry run: same counts, nothing written), then
+  // applied on confirm (docs/system/eventor-sync.md).
+  const previewMutation = trpc.eventor.sync.useMutation();
   const syncMutation = trpc.eventor.sync.useMutation({
-    onSuccess: () => onSynced(),
+    onSuccess: () => {
+      previewMutation.reset();
+      onSynced();
+    },
   });
+  const syncError = syncMutation.error ?? previewMutation.error;
+  const syncErrorText = (message: string) =>
+    message.startsWith("EVENT_CHECKED_OUT")
+      ? t("syncCheckedOut")
+      : message.startsWith("EVENTOR_PREVIEW_REQUIRED")
+        ? t("syncPreviewRequired")
+        : message.startsWith("EVENTOR_PREVIEW_CHANGED")
+        ? t("syncPreviewChanged")
+        : message.startsWith("EVENTOR_EMPTY_RESPONSE")
+        ? t("syncEmptyResponse")
+        : message.startsWith("EVENTOR_TIMEOUT")
+        ? t("eventorTimeout")
+        : message;
+  const [includeCourse, setIncludeCourse] = useIncludeCourse(nameId);
   const pushResultsMutation = trpc.eventor.pushResults.useMutation();
   const pushStartListMutation = trpc.eventor.pushStartList.useMutation();
+  // A push that timed out may still have landed: say so in amber, not red.
+  const pushNotice = (message: string, failedKey: "pushStartListFailed" | "pushResultsFailed") => {
+    if (message.startsWith("EVENTOR_OUTCOME_UNKNOWN")) return { tone: "unknown" as const, text: t("pushOutcomeUnknown") };
+    if (message.startsWith("EVENTOR_PUSH_IN_PROGRESS")) return { tone: "info" as const, text: t("pushInProgress") };
+    if (message.startsWith("EVENTOR_TIMEOUT")) return { tone: "error" as const, text: t("eventorTimeout") };
+    return { tone: "error" as const, text: t(failedKey, { message }) };
+  };
+  const noticeClass = (tone: "unknown" | "info" | "error") =>
+    tone === "error"
+      ? "bg-red-50 border-red-100 text-red-600"
+      : tone === "unknown"
+        ? "bg-amber-50 border-amber-200 text-amber-800"
+        : "bg-slate-50 border-slate-200 text-slate-700";
 
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -397,11 +629,15 @@ function EventorSyncPanel({
 
         <div className="flex flex-col sm:flex-row gap-2">
           <button
-            onClick={() => syncMutation.mutate()}
-            disabled={syncMutation.isPending || !apiKeyConfigured}
+            onClick={() => {
+              syncMutation.reset();
+              previewMutation.mutate({ dryRun: true });
+            }}
+            data-testid="eventor-sync-button"
+            disabled={syncMutation.isPending || previewMutation.isPending || !apiKeyConfigured}
             className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap"
           >
-            {syncMutation.isPending ? (
+            {syncMutation.isPending || previewMutation.isPending ? (
               <>
                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                 {t("syncing")}
@@ -417,7 +653,8 @@ function EventorSyncPanel({
           </button>
 
           <button
-            onClick={() => pushStartListMutation.mutate()}
+            data-testid="eventor-push-startlist"
+            onClick={() => pushStartListMutation.mutate({ includeCourse })}
             disabled={pushStartListMutation.isPending || !apiKeyConfigured}
             className="px-4 py-2 bg-slate-600 text-white text-sm font-medium rounded-lg hover:bg-slate-700 disabled:opacity-50 transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap"
           >
@@ -437,7 +674,8 @@ function EventorSyncPanel({
           </button>
 
           <button
-            onClick={() => pushResultsMutation.mutate()}
+            data-testid="eventor-push-results"
+            onClick={() => pushResultsMutation.mutate({ includeCourse })}
             disabled={pushResultsMutation.isPending || !apiKeyConfigured}
             className="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50 transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap"
           >
@@ -458,27 +696,58 @@ function EventorSyncPanel({
         </div>
       </div>
 
-      {syncMutation.isSuccess && syncMutation.data && (
-        <div className="mt-3 p-3 bg-white rounded-lg border border-blue-100 text-xs text-slate-600">
-          <span className="font-medium text-green-700">{t("syncComplete")}</span>{" "}
-          {syncMutation.data.runnersAdded > 0 && <span>{t("runnersAdded", { count: syncMutation.data.runnersAdded })}, </span>}
-          {syncMutation.data.runnersUpdated > 0 && <span>{t("runnersUpdated", { count: syncMutation.data.runnersUpdated })}, </span>}
-          {syncMutation.data.cancelledCount > 0 && <span className="text-amber-700">{t("cancelledCount", { count: syncMutation.data.cancelledCount })}, </span>}
-          {syncMutation.data.classesAdded > 0 && <span>{t("classesAdded", { count: syncMutation.data.classesAdded })}, </span>}
-          {syncMutation.data.classesUpdated > 0 && <span>{t("classesUpdated", { count: syncMutation.data.classesUpdated })}, </span>}
-          {syncMutation.data.clubsAdded > 0 && <span>{t("clubsAdded", { count: syncMutation.data.clubsAdded })}, </span>}
-          {syncMutation.data.clubsUpdated > 0 && <span>{t("clubsUpdated", { count: syncMutation.data.clubsUpdated })}, </span>}
-          {syncMutation.data.runnersAdded === 0 &&
-            syncMutation.data.runnersUpdated === 0 &&
-            syncMutation.data.cancelledCount === 0 &&
-            syncMutation.data.classesAdded === 0 &&
-            syncMutation.data.clubsAdded === 0 && <span>{t("everythingUpToDate")}</span>}
-        </div>
+      <label className="mt-2 flex items-center justify-end gap-2 text-xs text-slate-600 cursor-pointer">
+        <input
+          type="checkbox"
+          data-testid="eventor-push-include-course"
+          checked={includeCourse}
+          onChange={(e) => setIncludeCourse(e.target.checked)}
+        />
+        {t("pushIncludeCourse")}
+      </label>
+
+      {previewMutation.data && !syncMutation.isSuccess && (
+        <SyncCounts
+          result={previewMutation.data}
+          title={t("syncPreviewTitle")}
+          testId="eventor-sync-preview"
+        >
+          <div className="mt-3 flex gap-2">
+            <button
+              onClick={() => syncMutation.mutate({ confirmCancelIds: previewMutation.data?.cancelIds ?? [] })}
+              disabled={syncMutation.isPending}
+              data-testid="eventor-sync-confirm"
+              className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 cursor-pointer"
+            >
+              {t("syncApply")}
+            </button>
+            <button
+              onClick={() => previewMutation.reset()}
+              disabled={syncMutation.isPending}
+              data-testid="eventor-sync-cancel"
+              className="px-3 py-1.5 bg-white text-slate-600 text-xs font-medium rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
+            >
+              {t("syncCancel")}
+            </button>
+          </div>
+        </SyncCounts>
       )}
 
-      {syncMutation.isError && (
-        <div className="mt-3 p-3 bg-red-50 rounded-lg border border-red-100 text-xs text-red-600">
-          {t("syncFailed", { message: syncMutation.error.message })}
+      {syncMutation.isSuccess && syncMutation.data && (
+        <SyncCounts
+          result={syncMutation.data}
+          title={t("syncComplete")}
+          testId="eventor-sync-result"
+          done
+        />
+      )}
+
+      {syncError && (
+        <div
+          data-testid="eventor-sync-error"
+          className="mt-3 p-3 bg-red-50 rounded-lg border border-red-100 text-xs text-red-600"
+        >
+          {t("syncFailed", { message: syncErrorText(syncError.message) })}
         </div>
       )}
 
@@ -488,11 +757,19 @@ function EventorSyncPanel({
         </div>
       )}
 
-      {pushStartListMutation.isError && (
-        <div className="mt-3 p-3 bg-red-50 rounded-lg border border-red-100 text-xs text-red-600">
-          {t("pushStartListFailed", { message: pushStartListMutation.error.message })}
-        </div>
-      )}
+      {pushStartListMutation.isError && (() => {
+        const n = pushNotice(pushStartListMutation.error.message, "pushStartListFailed");
+        return (
+          <div
+            role="alert"
+            data-testid="eventor-push-notice"
+            data-tone={n.tone}
+            className={`mt-3 p-3 rounded-lg border text-xs ${noticeClass(n.tone)}`}
+          >
+            {n.text}
+          </div>
+        );
+      })()}
 
       {pushResultsMutation.isSuccess && pushResultsMutation.data && (
         <div className="mt-3 p-3 bg-amber-50 rounded-lg border border-amber-200 text-xs text-amber-800">
@@ -500,11 +777,19 @@ function EventorSyncPanel({
         </div>
       )}
 
-      {pushResultsMutation.isError && (
-        <div className="mt-3 p-3 bg-red-50 rounded-lg border border-red-100 text-xs text-red-600">
-          {t("pushResultsFailed", { message: pushResultsMutation.error.message })}
-        </div>
-      )}
+      {pushResultsMutation.isError && (() => {
+        const n = pushNotice(pushResultsMutation.error.message, "pushResultsFailed");
+        return (
+          <div
+            role="alert"
+            data-testid="eventor-push-notice"
+            data-tone={n.tone}
+            className={`mt-3 p-3 rounded-lg border text-xs ${noticeClass(n.tone)}`}
+          >
+            {n.text}
+          </div>
+        );
+      })()}
 
       {!apiKeyConfigured && (
         <div className="mt-3 text-xs text-amber-700 bg-amber-50 p-2 rounded-lg">
@@ -517,11 +802,14 @@ function EventorSyncPanel({
 
 // ─── Runner Database Panel ──────────────────────────────────
 
-function RunnerDbPanel({ env }: { env?: string }) {
+export function RunnerDbPanel({ env }: { env?: string }) {
   const { t } = useTranslation("event");
   const timeAgo = useTimeAgo();
+  // `runnerDbStatus` needs event.manage: other users do not run it (and see no error).
+  const { has, loaded } = useCapabilities();
   const dbStatus = trpc.eventor.runnerDbStatus.useQuery(undefined, {
     staleTime: 60_000,
+    enabled: loaded && has("event.manage"),
   });
   const utils = trpc.useUtils();
   const syncMutation = trpc.eventor.syncRunnerDb.useMutation({
@@ -714,6 +1002,11 @@ function LiveResultsPanel() {
         <div className="mb-3 flex items-center gap-2 text-xs text-slate-500">
           <span className="inline-block w-2 h-2 rounded-full bg-green-400 animate-pulse" />
           <span>{t("live")}</span>
+          {status.data?.pushedByCloud && (
+            <span className="text-slate-400" data-testid="liveresults-pushed-by-cloud">
+              · {t("liveResultsPushedByCloud")}
+            </span>
+          )}
           {status.data?.lastPush && (
             <span className="text-slate-400">
               · {t("lastPush", { ago: timeAgo(status.data.lastPush) })} · {t("totalPushes", { count: status.data.pushCount })}
@@ -1590,7 +1883,29 @@ const APPS_SCRIPT_TEMPLATE = `function doPost(e) {
 
 function DatabaseBackup({ nameId }: { nameId: string }) {
   const { t } = useTranslation("event");
-  const href = `/api/backup/competition?name=${encodeURIComponent(nameId)}`;
+  const href = `/api/backup/event?name=${encodeURIComponent(nameId)}`;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // A dump that cannot start answers an error; one that fails midway
+  // aborts the transfer. Either way the download rejects: say so.
+  const download = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await downloadSameOriginFile(href);
+    } catch (err) {
+      const text = err instanceof Error ? err.message : String(err);
+      let message = text;
+      try {
+        message = (JSON.parse(text) as { error?: string }).error ?? text;
+      } catch {
+        // Not JSON: the text as it is.
+      }
+      setError(message);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div>
@@ -1614,15 +1929,21 @@ function DatabaseBackup({ nameId }: { nameId: string }) {
           </div>
           <button
             type="button"
-            onClick={() => void downloadSameOriginFile(href)}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-slate-700 text-white text-sm font-medium rounded-lg hover:bg-slate-800 transition-colors cursor-pointer whitespace-nowrap"
+            onClick={() => void download()}
+            disabled={busy}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-slate-700 text-white text-sm font-medium rounded-lg hover:bg-slate-800 transition-colors cursor-pointer whitespace-nowrap disabled:opacity-60 disabled:cursor-wait"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
-            {t("downloadBackup")}
+            {busy ? t("downloadBackupBusy") : t("downloadBackup")}
           </button>
         </div>
+        {error && (
+          <p role="alert" data-testid="backup-error" className="mt-3 text-sm text-red-600">
+            {t("downloadBackupFailed", { message: error })}
+          </p>
+        )}
       </div>
     </div>
   );

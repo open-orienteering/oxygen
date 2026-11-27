@@ -65,6 +65,27 @@ export function VenueLeasePanel({ nameId }: { nameId: string }) {
 
   const invalidate = () => utils.lease.status.invalidate();
   const checkout = trpc.lease.checkout.useMutation({ onSettled: invalidate });
+  // A checkout the server refuses for a reason the operator may override
+  // (message prefix = code, as PATCH_STALE): confirm, then ask again with
+  // the matching flag.
+  const runCheckout = async () => {
+    let flags: { discardLocal?: boolean; replaceClashingGraphics?: boolean } = {};
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await checkout.mutateAsync({ nameId, ...flags });
+        return;
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "";
+        const next =
+          message.startsWith("CHECKOUT_UNSHIPPED") ? { key: "leaseConfirmUnshipped" as const, flag: { discardLocal: true } }
+          : message.startsWith("CHECKOUT_LOCAL_EVENT") ? { key: "leaseConfirmLocalEvent" as const, flag: { discardLocal: true } }
+          : message.startsWith("GRAPHIC_ID_CLASH") ? { key: "leaseConfirmGraphicClash" as const, flag: { replaceClashingGraphics: true } }
+          : null;
+        if (!next || !window.confirm(t(next.key, { detail: message }))) return;
+        flags = { ...flags, ...next.flag };
+      }
+    }
+  };
   const checkin = trpc.lease.checkin.useMutation({ onSettled: invalidate });
   const forceTakeover = trpc.lease.forceTakeover.useMutation({
     onSettled: invalidate,
@@ -112,7 +133,8 @@ export function VenueLeasePanel({ nameId }: { nameId: string }) {
           )}
         </div>
 
-        {s.lease?.heldByThisNode && s.shipping && (
+        {/* Also without a lease: entries a checked-in or never-shipped copy still holds. */}
+        {(s.lease?.heldByThisNode || (!s.lease && (s.shipping?.pendingPush ?? 0) > 0)) && s.shipping && (
           <div className="text-xs text-slate-500">
             {s.shipping.pendingPush > 0
               ? t("leasePending", { count: s.shipping.pendingPush })
@@ -124,7 +146,7 @@ export function VenueLeasePanel({ nameId }: { nameId: string }) {
           {!s.lease && s.peerConfigured && (
             <button
               data-testid="lease-checkout"
-              onClick={() => checkout.mutate({ nameId })}
+              onClick={() => void runCheckout()}
               disabled={checkout.isPending}
               className="px-3 py-1.5 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 cursor-pointer"
             >
@@ -160,6 +182,15 @@ export function VenueLeasePanel({ nameId }: { nameId: string }) {
             </button>
           )}
         </div>
+
+        {checkin.data && "settingsNotTaken" in checkin.data && checkin.data.settingsNotTaken && (
+          <div
+            data-testid="lease-settings-not-taken"
+            className="text-sm text-amber-800 bg-amber-50 rounded-lg px-3 py-2"
+          >
+            {t("leaseCheckinSettingsNotTaken")}
+          </div>
+        )}
 
         {err && (
           <div

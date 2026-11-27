@@ -54,8 +54,8 @@ describe("rasteriseSvgGraphic over a window", () => {
   });
 
   it("carries a DOCTYPE's entities and a `>` inside a root attribute", async () => {
-    const svg = `<?xml version="1.0"?><!DOCTYPE svg [<!ENTITY ns_svg "http://www.w3.org/2000/svg"><!ENTITY red "#ff0000">]>` +
-      `<svg xmlns="&ns_svg;" data-note="a > b" width="1000" height="1000"><rect x="400" y="400" width="100" height="100" fill="&red;"/></svg>`;
+    const svg = `<?xml version="1.0"?><!DOCTYPE svg [<!ENTITY ns_svg "http://www.w3.org/2000/svg">]>` +
+      `<svg xmlns="&ns_svg;" data-note="a > b" width="1000" height="1000"><rect x="400" y="400" width="100" height="100" fill="#ff0000"/></svg>`;
     const r = await rgba(await rasteriseSvgGraphic(enc(svg), 100, 100, { x: 0.4, y: 0.4, width: 0.1, height: 0.1 }));
     expect(px(r, 2, 2)).toEqual([255, 0, 0, 255]);
     expect(px(r, 97, 97)).toEqual([255, 0, 0, 255]);

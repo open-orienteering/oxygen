@@ -41,4 +41,30 @@ describe("pickClimbField (course-elevation.md §3)", () => {
   it("a ready DEM over a map without contours still gives its ground", () => {
     expect(pickClimbField({ state: "none", url: null, dem: dem(lm) })).toEqual({ url: "/g.bin", basis: "ground", provider: lm });
   });
+
+  describe("the contour interval (§3, §0.43)", () => {
+    const iv = (confirmedM: number | null) => ({ assumedM: 5, confirmedM });
+
+    it("the plain contour field carries the interval to read at and whether a person confirmed it", () => {
+      expect(pickClimbField({ ...contours, interval: iv(null) })).toEqual({ url: "/h.bin?v=1", basis: "contours", provider: null, interval: { m: 5, confirmed: false } });
+      expect(pickClimbField({ ...contours, interval: iv(5) })).toEqual({ url: "/h.bin?v=1", basis: "contours", provider: null, interval: { m: 5, confirmed: true } });
+      expect(pickClimbField({ ...contours, interval: iv(2.5) })).toEqual({ url: "/h.bin?v=1", basis: "contours", provider: null, interval: { m: 2.5, confirmed: true } });
+    });
+
+    it("a descriptor without an interval reads as unconfirmed: no interval on the pick", () => {
+      expect(pickClimbField({ ...contours, interval: null })?.interval).toBeUndefined();
+      expect(pickClimbField(contours)?.interval).toBeUndefined();
+    });
+
+    it("the anchored row is taken when unconfirmed or confirmed at the assumed interval, not at another", () => {
+      const coarse = { ...contours, dem: dem(glo) };
+      expect(pickClimbField({ ...coarse, interval: iv(null) })).toEqual({ url: "/a.bin", basis: "contours", provider: glo, interval: { m: 5, confirmed: false } });
+      expect(pickClimbField({ ...coarse, interval: iv(5) })).toEqual({ url: "/a.bin", basis: "contours", provider: glo, interval: { m: 5, confirmed: true } });
+      expect(pickClimbField({ ...coarse, interval: iv(2.5) })).toEqual({ url: "/h.bin?v=1", basis: "contours", provider: null, interval: { m: 2.5, confirmed: true } });
+    });
+
+    it("a ground model needs no interval", () => {
+      expect(pickClimbField({ ...contours, dem: dem(lm), interval: iv(null) })).toEqual({ url: "/g.bin", basis: "ground", provider: lm });
+    });
+  });
 });

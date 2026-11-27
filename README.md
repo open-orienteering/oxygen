@@ -76,7 +76,7 @@ A kiosk screen shows each finisher their name, class and time the moment the car
 Who has not started, who is in the forest, who has finished, and how far each course has come, live on a dashboard and a map.
 </td>
 <td valign="top">
-<a href="docs/guide/maps.md"><img src="docs/screenshots/map-3d-track.png" alt="A GPS track drawn on the map draped over the terrain in 3D"></a>
+<a href="docs/guide/maps.md"><img src="docs/screenshots/map-3d.png" alt="The demo map and its showcase course draped over the terrain in 3D"></a>
 <h3>Terrain and tracks in 3D</h3>
 With height data configured, see the map draped over the terrain, with GPS tracks (GPX or TCX) drawn on the ground.
 </td>
@@ -92,10 +92,12 @@ The [feature tour](docs/features.md) has more pictures, and every area links on 
 Multi-arch images are published on GHCR (`ghcr.io/open-orienteering/oxygen`, tags `stable`, `edge` and `vX.Y.Z`):
 
 ```bash
-docker compose -f docker-compose.release.yml up -d   # http://localhost:8080
+# Pin a release (the tags are on the GitHub Releases page; replace v0.9.0):
+OXYGEN_IMAGE=ghcr.io/open-orienteering/oxygen:v0.9.0 \
+  docker compose -f docker-compose.release.yml up -d   # http://localhost:8080
 ```
 
-Pin a release with `OXYGEN_IMAGE=ghcr.io/open-orienteering/oxygen:v0.9.0`. [Releases and images](docs/releases/README.md) explains the tags.
+Without `OXYGEN_IMAGE` the floating `stable` tag is used. An image already on the machine is reused, so `up -d` works offline and never upgrades by itself; to upgrade, `pull`, take a pre-upgrade dump, then `up -d` ([backup-restore.md](docs/ops/backup-restore.md#before-an-upgrade)). `edge` is the newest `main` commit that passed the image smoke test. [Releases and images](docs/releases/README.md) explains the tags.
 
 **Eventor:** a club in the Swedish Orienteering Federation's Eventor enters its club API key once, under Settings → Eventor (an admin tab). Every event on the instance then syncs entries, clubs and competitors, and uploads results and start lists back.
 
@@ -154,4 +156,4 @@ Until May 2026 Oxygen stored its data in a MeOS-compatible MySQL layout. It now 
 
 [GNU Affero General Public License v3.0](LICENSE): free to use and modify; derivatives must stay open source, including when run as a hosted service.
 
-Map credits: the demo competition uses the CC0 Puit de Laven map ([demo guide](docs/ops/demo.md#the-map)). Some screenshots show a club map, published as images with the club's permission.
+Map credits: the demo competition uses a map from [o-kartan.se](https://o-kartan.se), licensed to the project, with invented detail added ([demo map](docs/ops/demo-map.md)). Some screenshots show a club map, published as images with the club's permission.

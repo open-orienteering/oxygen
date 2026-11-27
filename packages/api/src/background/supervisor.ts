@@ -34,6 +34,20 @@ import {
 } from "../online-input/puller.js";
 import { startShipper, stopShipper } from "../sync/shipper.js";
 import { maybeStartStorageGc, stopStorageGc } from "../map-store/gc.js";
+import { nodeRole, syncPeerUrl } from "../sync/nodeIdentity.js";
+
+/**
+ * Whether this node publishes to LiveResults. The cloud is the one owner
+ * (docs/system/offline-architecture.md, single-owner services): a venue box
+ * with an uplink would otherwise push the same competition as the cloud from
+ * a second database, and the lagging copy would undo the other's rows each
+ * cycle (SYNC-14). The box's results reach LiveResults through shipping.
+ * A standalone box (no `SYNC_PEER_URL`) has no cloud behind it and pushes
+ * itself.
+ */
+export function publishesLiveResults(): boolean {
+  return !(nodeRole() === "venue" && syncPeerUrl() !== null);
+}
 
 /** How often the leader re-reads the configuration, in ms. */
 const DEFAULT_RECONCILE_MS = 5_000;
@@ -47,7 +61,8 @@ export interface BackgroundJobs {
 
 export const defaultJobs: BackgroundJobs = {
   async reconcile() {
-    await reconcileEnabledPushers();
+    if (publishesLiveResults()) await reconcileEnabledPushers();
+    else liveResultsPusherManager.stopAll();
     await reconcileEnabledPullers();
     // Idempotent: returns early when a timer is already armed.
     startShipper();

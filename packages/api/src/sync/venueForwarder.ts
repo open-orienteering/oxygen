@@ -27,11 +27,26 @@
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { isCloudOwnedMutation } from "./ownership.js";
-import { nodeRole, syncPeerUrl, syncSharedSecret } from "./nodeIdentity.js";
-import { authHeaderName } from "../auth.js";
+import {
+  SYNC_FORWARDED_CAPS_HEADER,
+  SYNC_FORWARDED_HEADER,
+  SYNC_NODE_ID_HEADER,
+  SYNC_SECRET_HEADER,
+  nodeId,
+  nodeIdIsDefault,
+  nodeRole,
+  syncPeerUrl,
+  syncSharedSecret,
+} from "./nodeIdentity.js";
+import { makeSyncHeaders } from "./googleIdToken.js";
+import { createContext, capabilitiesForEventRow } from "../trpc.js";
+import { ALL_CAPABILITIES, type Capability } from "@oxygen/shared";
+import { authMode } from "../auth.js";
 import { prisma } from "../db.js";
 import { makeLeasePeer } from "./lease.js";
 import { refreshCloudOwnedMaps } from "./mapRefresh.js";
+import { refreshCloudOwnedSettings } from "./settingsRefresh.js";
+import { enqueueAutoRoutes } from "../leg-routes-auto.js";
 
 /** Parse the procedure paths out of a tRPC request URL (batched or not). */
 export function trpcProcedurePaths(url: string): string[] {
@@ -75,39 +90,86 @@ export const MAP_REFRESH_PREFIXES: readonly string[] = [
   "courseObject.",
 ];
 
+/** Whether a forwarded call wrote an out-of-bounds object: the holder searches its automatic routes again once it has landed. */
+export function forwardsObjectWrite(paths: readonly string[]): boolean {
+  return paths.some((p) => p.startsWith("courseObject."));
+}
+
+/** Exact forwarded paths that write a map row the box mirrors (the contour interval is on the map file's row). */
+export const MAP_REFRESH_PATHS: readonly string[] = ["course.setContourInterval"];
+
 /** Whether a forwarded call wrote a map row the box mirrors. */
 export function refreshesMapRows(paths: readonly string[]): boolean {
-  return paths.some((p) => MAP_REFRESH_PREFIXES.some((prefix) => p.startsWith(prefix)));
+  return paths.some((p) => MAP_REFRESH_PATHS.includes(p) || MAP_REFRESH_PREFIXES.some((prefix) => p.startsWith(prefix)));
+}
+
+/**
+ * The forwarded writes after which the box refreshes the event row's
+ * cloud-owned columns (review MC-08): exact paths, or prefixes ending in ".".
+ */
+export const SETTINGS_REFRESH_PATHS: readonly string[] = [
+  "event.updateType",
+  "event.setTestEvent",
+  "competition.updateType",
+  "competition.setTestEvent",
+  "course.setOverprintCuts",
+  "liveresults.",
+  "eventor.",
+];
+
+/** Whether a forwarded call wrote a cloud-owned column of the event row. */
+export function refreshesSettings(paths: readonly string[]): boolean {
+  return paths.some((p) =>
+    SETTINGS_REFRESH_PATHS.some((s) => (s.endsWith(".") ? p.startsWith(s) : p === s)),
+  );
 }
 
 /** The event a request names: `x-event-id`, or `x-competition-id`, which the web sends (`trpc.ts` reads both). */
 export function requestEventName(headers: Record<string, string | string[] | undefined>): string | null {
-  const raw = headers["x-event-id"] ?? headers["x-competition-id"];
-  const v = Array.isArray(raw) ? raw[0] : raw;
-  return v ? v : null;
+  const first = (h: string | string[] | undefined) => (Array.isArray(h) ? h[0] : h) || "";
+  return first(headers["x-event-id"]) || first(headers["x-competition-id"]) || null;
 }
 
 /** How long a forwarded write's reply waits for the refresh that follows it. */
 export const FORWARD_REFRESH_WAIT_MS = 10_000;
 
 /**
- * Refresh the event's map rows after a forwarded write (row G19), waiting
- * at most `waitMs`. Never throws: a failed refresh leaves the box on its
- * copy until the cadence's next one.
+ * Refresh what a forwarded write changed on the cloud — the event's map rows
+ * (row G19) and/or the event row's cloud-owned columns (review MC-08) —
+ * waiting at most `waitMs`. Never throws: a failed refresh leaves the box on
+ * its copy until the cadence's next one.
  */
-export async function refreshAfterForward(nameId: string, peerUrl: string, waitMs = FORWARD_REFRESH_WAIT_MS): Promise<void> {
+export async function refreshAfterForward(
+  nameId: string,
+  peerUrl: string,
+  waitMs = FORWARD_REFRESH_WAIT_MS,
+  what: { maps?: boolean; settings?: boolean; routes?: boolean } = { maps: true },
+): Promise<void> {
   const secret = syncSharedSecret();
   if (!secret) return;
   try {
     const db = prisma();
-    const event = await db.event.findFirst({ where: { nameId }, select: { id: true, nameId: true, zeroTime: true } });
+    const event = await db.event.findFirst({ where: { nameId }, select: { id: true, nameId: true, zeroTime: true, timeZone: true } });
     if (!event) return;
-    const work = refreshCloudOwnedMaps(db, event, makeLeasePeer(peerUrl, secret)).then(
-      () => {},
-      (err: unknown) => {
-        console.warn(`[venue-forwarder] ${nameId}: map refresh after a forwarded write failed:`, err instanceof Error ? err.message : String(err));
-      },
-    );
+    const peer = makeLeasePeer(peerUrl, secret);
+    const step = (label: string, run: () => Promise<unknown>): Promise<void> =>
+      run().then(
+        () => {},
+        (err: unknown) => {
+          console.warn(`[venue-forwarder] ${nameId}: ${label} refresh after a forwarded write failed:`, err instanceof Error ? err.message : String(err));
+        },
+      );
+    const work = Promise.all([
+      what.settings ? step("settings", () => refreshCloudOwnedSettings(db, event, peer)) : Promise.resolve(),
+      what.maps
+        ? step("map", async () => {
+            await refreshCloudOwnedMaps(db, event, peer);
+            // An out-of-bounds object forwarded from this box has landed: the automatic routes are searched again here,
+            // where the lease is held (docs/course-elevation.md §7.5 "When").
+            if (what.routes) enqueueAutoRoutes(db, event.id);
+          })
+        : Promise.resolve(),
+    ]);
     let timer: NodeJS.Timeout | undefined;
     const bound = new Promise<void>((resolve) => {
       timer = setTimeout(resolve, waitMs);
@@ -116,29 +178,53 @@ export async function refreshAfterForward(nameId: string, peerUrl: string, waitM
     await Promise.race([work, bound]);
     clearTimeout(timer);
   } catch (err) {
-    console.warn(`[venue-forwarder] ${nameId}: map refresh after a forwarded write failed:`, err instanceof Error ? err.message : String(err));
+    console.warn(`[venue-forwarder] ${nameId}: refresh after a forwarded write failed:`, err instanceof Error ? err.message : String(err));
   }
 }
 
 /** Why a cloud-owned call failed on a venue: the cloud is unreachable, or the batch mixed it with local calls. */
-export type VenueRefusalReason = "CLOUD_UNREACHABLE" | "MIXED_BATCH";
+export type VenueRefusalReason = "CLOUD_UNREACHABLE" | "MIXED_BATCH" | "CLOUD_AUTH";
 
 const REFUSAL_MESSAGES: Record<VenueRefusalReason, string> = {
   CLOUD_UNREACHABLE:
     "This action requires connectivity to the cloud (cloud-owned data is not editable at an offline venue).",
   MIXED_BATCH:
     "A cloud-owned change was batched with local calls; nothing was run. Retry the action.",
+  CLOUD_AUTH:
+    "The cloud refused this box's credentials (check SYNC_SHARED_SECRET and the IAP settings).",
 };
+
+/** Shown when the box has no NODE_ID of its own (the cloud's default id cannot lease or forward). */
+export const NODE_ID_UNSET_MESSAGE =
+  "This box has no node id of its own: set NODE_ID to a unique name for it (not \"cloud\") and restart.";
+
+/** A forwarded call that gets no answer within this long is treated as an unreachable cloud. */
+export const FORWARD_TIMEOUT_MS = 30_000;
+
+/**
+ * Whether a cloud reply is a tRPC answer (JSON) the box relays as it is. A
+ * redirect (IAP sending the box to a sign-in page) or an HTML page is the
+ * front door refusing the box, not the API answering: `CLOUD_AUTH`. An HTML
+ * 5xx is an outage in front of the API: `CLOUD_UNREACHABLE`.
+ */
+export function classifyForwardReply(status: number, contentType: string | null): "relay" | "CLOUD_AUTH" | "CLOUD_UNREACHABLE" {
+  if (status >= 300 && status < 400) return "CLOUD_AUTH";
+  // A JSON 401 is the cloud's own "invalid or missing node sync secret" (a cloud not behind IAP).
+  if (status === 401) return "CLOUD_AUTH";
+  if (contentType && /\bjson\b/i.test(contentType)) return "relay";
+  return status >= 500 ? "CLOUD_UNREACHABLE" : "CLOUD_AUTH";
+}
 
 /** tRPC-shaped error body so the web client surfaces a typed failure (`data.reason` tells the two cases apart). */
 export function connectivityErrorBody(
   paths: string[],
   batched: boolean,
   reason: VenueRefusalReason = "CLOUD_UNREACHABLE",
+  message: string = REFUSAL_MESSAGES[reason],
 ): unknown {
   const one = (path: string) => ({
     error: {
-      message: REFUSAL_MESSAGES[reason],
+      message,
       code: -32603,
       data: { code: "PRECONDITION_FAILED", httpStatus: 412, path, reason },
     },
@@ -146,7 +232,54 @@ export function connectivityErrorBody(
   return batched ? paths.map(one) : one(paths[0] ?? "");
 }
 
-export function registerVenueForwarder(server: FastifyInstance): void {
+/** A tRPC-shaped refusal made by the box itself (the call is not forwarded). */
+export function localRefusalBody(paths: string[], batched: boolean, code: "UNAUTHORIZED" | "FORBIDDEN" | "BAD_REQUEST", message: string): unknown {
+  const wire = { UNAUTHORIZED: [-32001, 401], FORBIDDEN: [-32003, 403], BAD_REQUEST: [-32600, 400] } as const;
+  const one = (path: string) => ({
+    error: {
+      message,
+      code: wire[code][0],
+      data: { code, httpStatus: wire[code][1], path },
+    },
+  });
+  return batched ? paths.map(one) : one(paths[0] ?? "");
+}
+
+/**
+ * Who may lend the box's authority upstream, and what the forward may do.
+ * The forward is made as the box, so with login on at the box the local
+ * caller is checked first: it must be signed in (401), and on an event-scoped
+ * forward must hold at least one capability on the box's copy of that event
+ * (403). The capabilities it holds (an admin: all) travel in
+ * `x-oxygen-forwarded-caps`, and the cloud lets the forward do no more than
+ * those. A forward that names no event needs a signed-in user only; it carries
+ * the capabilities of an admin or none (cloud-owned, event-less procedures
+ * check the node, not capabilities). With login off at the box (a LAN venue
+ * box) every device on the LAN is trusted, as for all local writes: the header is `*`;
+ * an empty set is sent as `none`, never as an empty value.
+ */
+export async function localForwardGate(
+  req: FastifyRequest,
+): Promise<{ refusal: { code: "UNAUTHORIZED" | "FORBIDDEN" | "BAD_REQUEST"; message: string } } | { caps: string; eventName: string | null }> {
+  const named = requestEventName(req.headers);
+  // Login off: every LAN device is trusted; `*` is still limited by the cloud to the event the box holds.
+  if (authMode() === "off") return { caps: "*", eventName: named };
+  const ctx = await createContext({ req } as unknown as Parameters<typeof createContext>[0]);
+  if (!ctx.user) return { refusal: { code: "UNAUTHORIZED", message: "Not authenticated" } };
+  if (named && !ctx.event) return { refusal: { code: "BAD_REQUEST", message: "Unknown event" } };
+  const list = (caps: Iterable<Capability>) => [...caps].join(",") || "none";
+  if (ctx.event) {
+    const date = ctx.event.date ?? new Date(0);
+    const caps = ctx.user.isAdmin ? new Set<Capability>(ALL_CAPABILITIES) : await capabilitiesForEventRow(ctx, { id: ctx.event.id, date });
+    if (caps.size === 0) return { refusal: { code: "FORBIDDEN", message: "You have no access to this event" } };
+    return { caps: list(caps), eventName: ctx.event.nameId };
+  }
+  return { caps: ctx.user.isAdmin ? list(ALL_CAPABILITIES) : "none", eventName: null };
+}
+
+/** `allowDefaultNodeId` is a test seam only: a process that plays both the box and its stub cloud shares one NODE_ID. */
+export function registerVenueForwarder(server: FastifyInstance, opts: { timeoutMs?: number; allowDefaultNodeId?: boolean } = {}): void {
+  const timeoutMs = opts.timeoutMs ?? FORWARD_TIMEOUT_MS;
   const peerUrl = syncPeerUrl();
   if (nodeRole() !== "venue" || !peerUrl) return;
 
@@ -160,30 +293,57 @@ export function registerVenueForwarder(server: FastifyInstance): void {
 
     const paths = trpcProcedurePaths(req.url);
     const batched = req.url.includes("batch=1");
+    const gate = await localForwardGate(req);
+    if ("refusal" in gate) {
+      const { refusal } = gate;
+      void reply
+        .code(refusal.code === "UNAUTHORIZED" ? 401 : refusal.code === "BAD_REQUEST" ? 400 : 403)
+        .send(localRefusalBody(paths, batched, refusal.code, refusal.message));
+      return reply;
+    }
+    // A box still named "cloud" would be refused by the cloud as an impostor of itself: say what to fix, do not call.
+    if (nodeIdIsDefault() && !opts.allowDefaultNodeId) {
+      void reply.code(412).send(connectivityErrorBody(paths, batched, "CLOUD_AUTH", NODE_ID_UNSET_MESSAGE));
+      return reply;
+    }
     try {
+      // The box's own credentials, never the caller's: the node secret, its
+      // id and the forwarded marker (the cloud then runs the call as this
+      // node, under the lease rule), plus an IAP token when configured. The
+      // caller's identity header is not relayed (it would be a header the
+      // cloud's proxy never set).
+      const secret = syncSharedSecret();
+      const base: Record<string, string> = {
+        "content-type": req.headers["content-type"] ?? "application/json",
+        // One event header, as the gate resolved it: the cloud cannot read another event than the one checked here.
+        ...(gate.eventName ? { "x-event-id": gate.eventName } : {}),
+        ...(secret ? { [SYNC_SECRET_HEADER]: secret } : {}),
+        [SYNC_NODE_ID_HEADER]: nodeId(),
+        [SYNC_FORWARDED_HEADER]: "1",
+        [SYNC_FORWARDED_CAPS_HEADER]: gate.caps,
+      };
+      const made = makeSyncHeaders(base);
+      const headers = typeof made === "function" ? await made() : made;
       const upstream = await fetch(`${peerUrl}${req.url}`, {
         method: "POST",
-        headers: {
-          "content-type": req.headers["content-type"] ?? "application/json",
-          ...(req.headers["x-event-id"]
-            ? { "x-event-id": String(req.headers["x-event-id"]) }
-            : {}),
-          ...(req.headers["x-competition-id"]
-            ? { "x-competition-id": String(req.headers["x-competition-id"]) }
-            : {}),
-          ...(() => {
-            const name = authHeaderName();
-            const raw = req.headers[name];
-            if (raw == null) return {};
-            return { [name]: Array.isArray(raw) ? raw[0] : raw };
-          })(),
-        },
+        headers,
         body: JSON.stringify(req.body),
+        redirect: "manual",
+        signal: AbortSignal.timeout(timeoutMs),
       });
+      const verdict = classifyForwardReply(upstream.status, upstream.headers.get("content-type"));
+      if (verdict !== "relay") {
+        await upstream.body?.cancel().catch(() => {});
+        void reply.code(412).send(connectivityErrorBody(paths, batched, verdict));
+        return reply;
+      }
       const text = await upstream.text();
-      const nameId = requestEventName(req.headers);
-      if (upstream.ok && nameId && refreshesMapRows(paths)) {
-        await refreshAfterForward(nameId, peerUrl);
+      const nameId = gate.eventName;
+      if (upstream.ok && nameId) {
+        const maps = refreshesMapRows(paths);
+        const settings = refreshesSettings(paths);
+        const routes = forwardsObjectWrite(paths);
+        if (maps || settings) await refreshAfterForward(nameId, peerUrl, FORWARD_REFRESH_WAIT_MS, { maps, settings, routes });
       }
       void reply
         .code(upstream.status)

@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { markVenueSettingsChanged } from "../sync/shipper.js";
 import { TRPCError } from "@trpc/server";
-import { router, publicProcedure, authedProcedure, adminProcedure, viewProcedure, manageProcedure, kioskOrViewProcedure } from "../trpc.js";
+import { router, publicProcedure, authedProcedure, adminProcedure, viewProcedure, manageProcedure, manageRaceProcedure, kioskOrViewProcedure } from "../trpc.js";
 import { prisma, sanitizeNameId, getZeroTime, isReservedEventSlug } from "../db.js";
-import { kioskKeyMatches } from "../trpc.js";
+import { kioskKeyMatches, capabilitiesForEventRow, assertNotNodeForward } from "../trpc.js";
 import {
   grantSystemGroup,
   resolveEventCapabilities,
@@ -17,7 +18,7 @@ import {
   isEventKind,
 } from "@oxygen/shared";
 import { randomBytes } from "node:crypto";
-import { toAbsolute } from "../timeConvert.js";
+import { toAbsolute, hasTime, hasStartedByClock, eventNowDs } from "../timeConvert.js";
 import { resolveCourseExpectedPositions } from "./course.js";
 import { isWithdrawn, isFinished, WITHDRAWN_STATUSES } from "@oxygen/shared";
 import type {
@@ -33,6 +34,34 @@ import type {
 import { clearSheetsCache, testGoogleSheetPush } from "../sheetsBackup.js";
 import { runnerStatusToValue, valueToRunnerStatus } from "../statusConvert.js";
 import { ttlMemo } from "../ttl-memo.js";
+import { firstFreeEventSlug, yearOf } from "../event-slug.js";
+import { DAY_DS, isValidTimeZone } from "@oxygen/shared";
+import { zeroTimeForResults } from "../timeConvert.js";
+import { stopSimulationFor } from "./testLab.js";
+import { lockEventLeaseAndSync } from "../event-locks.js";
+import { getActiveLease, mayWriteEventData, writeRefusalError } from "../sync/lease.js";
+import type { Prisma } from "../generated/prisma/client.js";
+
+/** `events.zero_time` default (09:00). */
+const DEFAULT_ZERO_TIME = 324000;
+
+const timeZoneSchema = z.string().min(1).refine(isValidTimeZone, { message: "Unknown time zone" });
+
+/** True once the race has timing data: a finish, a punch, a read card. */
+async function timingDataPresent(
+  db: Prisma.TransactionClient,
+  eventId: bigint,
+): Promise<boolean> {
+  const [finished, teamsFinished, punches, cards, readouts] = await Promise.all([
+    // Removed rows too: their starts shift with ZeroTime, their finishes would not.
+    db.runner.count({ where: { eventId, finishTime: { not: 0 } } }),
+    db.team.count({ where: { eventId, finishTime: { not: 0 } } }),
+    db.punch.count({ where: { eventId } }),
+    db.card.count({ where: { eventId } }),
+    db.cardReadout.count({ where: { eventId } }),
+  ]);
+  return finished + teamsFinished + punches + cards + readouts > 0;
+}
 
 /**
  * `pg_database_size()` stats every file under the database directory,
@@ -172,6 +201,20 @@ export const eventRouter = router({
           manageById.set(row.id, caps.has("event.manage"));
         }
       }
+    } else if (ctx.authEnabled && !ctx.user) {
+      // A forwarded node call (no user): only the events whose lease the node holds.
+      visible.clear();
+      const holder = ctx.nodeForward?.nodeId;
+      if (holder) {
+        const leases = await prisma().eventLease.findMany({
+          where: { releasedAt: null, holderNodeId: holder, eventId: { in: rows.map((r) => r.id) } },
+          select: { eventId: true },
+        });
+        for (const l of leases) {
+          visible.add(l.eventId);
+          manageById.set(l.eventId, true);
+        }
+      }
     } else {
       for (const row of rows) manageById.set(row.id, true);
     }
@@ -241,10 +284,19 @@ export const eventRouter = router({
         name: z.string().min(1),
         date: z.string().min(1),
         nameId: z.string().optional(),
+        /**
+         * Planned first start (absolute deciseconds). ZeroTime is set one
+         * hour before it, rounded down to the hour (RES-04). Absent: 09:00.
+         */
+        firstStart: z.number().int().min(0).max(DAY_DS - 1).optional(),
+        timeZone: timeZoneSchema.optional(),
+        /** A throwaway event the Test Lab may fill with synthetic data (API-06). */
+        isTestEvent: z.boolean().optional().default(false),
         ...eventKindFields,
       }).superRefine(validateEventKind),
     )
     .mutation(async ({ ctx, input }) => {
+      assertNotNodeForward(ctx);
       const slug = sanitizeNameId(input.nameId ?? input.name);
       if (isReservedEventSlug(slug)) {
         throw new TRPCError({
@@ -261,13 +313,33 @@ export const eventRouter = router({
           message: `An event with slug "${slug}" already exists.`,
         });
       }
+      // The slug is unique over soft-deleted events too (MC-27): a name only a
+      // deleted event holds gets the year (then a counter) instead of a raw
+      // unique violation (EVT-11).
+      const free = existing
+        ? await firstFreeEventSlug(prisma(), slug, [
+            ...(yearOf(input.date) ? [yearOf(input.date) as string] : []),
+            ...Array.from({ length: 20 }, (_, i) => String(i + 2)),
+          ])
+        : slug;
+      if (!free) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `An event with slug "${slug}" already exists.`,
+        });
+      }
       const created = await prisma().event.create({
         data: {
-          nameId: slug,
+          nameId: free,
           name: input.name,
           date: new Date(input.date),
           kind: input.kind,
           kindCustom: input.kindCustom,
+          isTestEvent: input.isTestEvent,
+          ...(input.firstStart
+            ? { zeroTime: zeroTimeForResults([input.firstStart], DEFAULT_ZERO_TIME) }
+            : {}),
+          ...(input.timeZone ? { timeZone: input.timeZone } : {}),
         },
       });
       if (ctx.user) {
@@ -279,6 +351,112 @@ export const eventRouter = router({
         });
       }
       return { nameId: created.nameId, eventId: Number(created.id) };
+    }),
+
+  /** ZeroTime and time zone, for the event settings card. */
+  getTimeSettings: viewProcedure.query(async ({ ctx }) => {
+    const row = await ctx.db.event.findUniqueOrThrow({
+      where: { id: ctx.event.id },
+      select: { zeroTime: true, timeZone: true },
+    });
+    const timing = await timingDataPresent(ctx.db, ctx.event.id);
+    const lease = await getActiveLease(ctx.db, ctx.event.id);
+    return {
+      zeroTime: row.zeroTime,
+      timeZone: row.timeZone,
+      /** ZeroTime can be moved only before any finish, punch or card exists, and not under a lease. */
+      zeroTimeLocked: timing || lease !== null,
+    };
+  }),
+
+  /**
+   * Set the event's ZeroTime and time zone (RES-04, RES-06).
+   *
+   * Moving ZeroTime keeps every drawn start at its clock time: stored
+   * (relative) start times and class first starts shift by old − new. It is
+   * refused once timing data exists (a finish, a punch, a read card) or while
+   * a lease is held (the venue owns ZeroTime then), and when a drawn start
+   * would land exactly on the new ZeroTime.
+   */
+  setTimeSettings: manageProcedure
+    .input(
+      z.object({
+        zeroTime: z.number().int().min(0).max(DAY_DS - 1),
+        timeZone: timeZoneSchema,
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const eventId = ctx.event.id;
+      return ctx.db.$transaction(async (tx) => {
+        await lockEventLeaseAndSync(tx, eventId);
+        const row = await tx.event.findUniqueOrThrow({
+          where: { id: eventId },
+          select: { zeroTime: true, timeZone: true },
+        });
+        const oldZero = row.zeroTime;
+        const newZero = input.zeroTime;
+        // The time zone shifts no data, but during a lease it belongs to the
+        // venue box like the zero time (docs/system/offline-architecture.md
+        // "The event row during a lease"): the cloud refuses a change, the
+        // box keeps it out of its settings refresh and pushes it back.
+        if (input.timeZone !== row.timeZone) {
+          const verdict = await mayWriteEventData(tx, eventId);
+          if (!verdict.ok) throw writeRefusalError(verdict);
+        }
+        if (newZero !== oldZero) {
+          if (await getActiveLease(tx, eventId)) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                "The zero time cannot be moved while the event is checked out to a venue. Check it in first.",
+            });
+          }
+          if (await timingDataPresent(tx, eventId)) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                "The zero time cannot be moved after the race has started (finish times, punches or read cards exist).",
+            });
+          }
+          const delta = oldZero - newZero;
+          // Relative 0 is "no time" and 1 is "drawn, no time": neither moves,
+          // and no real time may land on either.
+          // Removed rows shift too, so they are checked too.
+          const collide = await tx.runner.count({
+            where: { eventId, startTime: { in: [-delta, 1 - delta], notIn: [0, 1] } },
+          });
+          const collideClass = await tx.class.count({
+            where: { eventId, firstStart: { in: [-delta, 1 - delta], not: 0 } },
+          });
+          const collideTeam = await tx.team.count({
+            where: { eventId, startTime: { in: [-delta, 1 - delta], notIn: [0, 1] } },
+          });
+          if (collide + collideClass + collideTeam > 0) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                "ZERO_TIME_COLLISION: a drawn start is exactly at the new zero time. Pick another zero time, or redraw first.",
+            });
+          }
+          await tx.runner.updateMany({
+            where: { eventId, startTime: { notIn: [0, 1] } },
+            data: { startTime: { increment: delta } },
+          });
+          await tx.team.updateMany({
+            where: { eventId, startTime: { notIn: [0, 1] } },
+            data: { startTime: { increment: delta } },
+          });
+          await tx.class.updateMany({
+            where: { eventId, firstStart: { not: 0 } },
+            data: { firstStart: { increment: delta } },
+          });
+        }
+        await tx.event.update({
+          where: { id: eventId },
+          data: { zeroTime: newZero, timeZone: input.timeZone },
+        });
+        return { zeroTime: newZero, timeZone: input.timeZone };
+      });
     }),
 
   updateType: manageProcedure
@@ -294,10 +472,62 @@ export const eventRouter = router({
       return toEventInfo(event);
     }),
 
+  /**
+   * Mark the event as a test event (API-06) or take the mark off. The Test
+   * Lab refuses every other event. Turning it on is refused
+   * (`PRECONDITION_FAILED`) unless the event is still empty: an Eventor link,
+   * a lease, a card readout, a runner, a card or a punch each refuse it.
+   * Turning it off is always allowed and halts a running simulation.
+   */
+  setTestEvent: manageProcedure
+    .input(z.object({ enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const eventId = ctx.event.id;
+      if (!input.enabled) {
+        await ctx.db.event.update({ where: { id: eventId }, data: { isTestEvent: false } });
+        stopSimulationFor(eventId);
+        return { isTestEvent: false };
+      }
+      await ctx.db.$transaction(async (tx) => {
+        await lockEventLeaseAndSync(tx, eventId);
+        // Lock the event row: a concurrent child insert (a runner, a readout)
+        // takes a key-share lock on it and so waits for this transaction.
+        await tx.$queryRaw`SELECT id FROM oxygen.events WHERE id = ${eventId} FOR UPDATE`;
+        const row = await tx.event.findUniqueOrThrow({
+          where: { id: eventId },
+          select: { eventorEventId: true },
+        });
+        const refuse = (message: string): never => {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message });
+        };
+        if (row.eventorEventId !== null) {
+          refuse("An event linked to Eventor cannot be a test event.");
+        }
+        if (await getActiveLease(tx, eventId)) {
+          refuse("An event checked out to a venue cannot become a test event.");
+        }
+        const where = { eventId };
+        const [readouts, runners, cards, punches] = await Promise.all([
+          tx.cardReadout.count({ where }),
+          tx.runner.count({ where }),
+          tx.card.count({ where }),
+          tx.punch.count({ where }),
+        ]);
+        if (readouts + runners + cards + punches > 0) {
+          refuse(
+            "Only an empty event can become a test event: this one already has runners, cards, punches or card readouts.",
+          );
+        }
+        await tx.event.update({ where: { id: eventId }, data: { isTestEvent: true } });
+      });
+      return { isTestEvent: true };
+    }),
+
   /** Soft-delete an event. */
   delete: authedProcedure
     .input(z.object({ nameId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
+      assertNotNodeForward(ctx);
       const event = await prisma().event.findUnique({
         where: { nameId: input.nameId },
       });
@@ -311,13 +541,7 @@ export const eventRouter = router({
         if (!ctx.user) {
           throw new TRPCError({ code: "UNAUTHORIZED", message: "Not authenticated" });
         }
-        const caps = await resolveEventCapabilities({
-          db: prisma(),
-          eventId: event.id,
-          eventDate: event.date,
-          user: ctx.user,
-          authEnabled: true,
-        });
+        const caps = await capabilitiesForEventRow(ctx, event);
         if (!caps.has("event.manage")) {
           throw new TRPCError({
             code: "FORBIDDEN",
@@ -334,8 +558,36 @@ export const eventRouter = router({
 
   /** Hard-delete every soft-deleted event (and its cascading children). */
   purgeDeleted: adminProcedure.mutation(async () => {
-    const result = await prisma().event.deleteMany({
-      where: { removed: true },
+    const result = await prisma().$transaction(async (tx) => {
+      const doomed = await tx.event.findMany({
+        where: { removed: true },
+        select: { id: true },
+      });
+      if (doomed.length === 0) return { count: 0 };
+      // Per-event settings rows have no foreign key: drop the ROC puller's
+      // config/watermark/status and the LiveResults push status with the
+      // event, so nothing keyed by a purged id is left behind (MC-28).
+      // Matched in JS: `startsWith` is a LIKE, where `_` is a wildcard.
+      const ids = new Set(doomed.map(({ id }) => String(id)));
+      const candidates = await tx.setting.findMany({
+        where: {
+          OR: [
+            { key: { startsWith: "online_input_" } },
+            { key: { startsWith: "liveresults_" } },
+          ],
+        },
+        select: { key: true },
+      });
+      const keys = candidates
+        .map(({ key }) => key)
+        .filter((key) => {
+          const m = /^online_input_(\d+)_/.exec(key) ?? /^liveresults_(\d+)_status$/.exec(key);
+          return m !== null && ids.has(m[1]);
+        });
+      if (keys.length > 0) await tx.setting.deleteMany({ where: { key: { in: keys } } });
+      return tx.event.deleteMany({
+        where: { id: { in: doomed.map((e) => e.id) } },
+      });
     });
     return { purged: result.count };
   }),
@@ -396,9 +648,7 @@ export const eventRouter = router({
 
       const runnerCountByClass = new Map<string, number>();
 
-      const now = new Date();
-      const meosNow =
-        (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;
+      const meosNow = eventNowDs(ctx.event);
       const zeroTime = event.zeroTime;
 
       const punchGroups = await ctx.db.punch.groupBy({
@@ -434,9 +684,7 @@ export const eventRouter = router({
         }
 
         const hasPunches = (punchMap.get(r.cardNo ?? -1) ?? 0) > 0;
-        const hasStartedByTime =
-          r.startTime > 0 &&
-          (r.startTime <= 1 || meosNow >= toAbsolute(r.startTime, zeroTime));
+        const hasStartedByTime = hasStartedByClock(r.startTime, zeroTime, meosNow);
         const finished = isFinished(status, r.finishTime);
 
         if (finished) {
@@ -487,6 +735,8 @@ export const eventRouter = router({
         classType: c.classType || undefined,
         freeStart: c.freeStart,
         noTiming: c.noTiming,
+        // The offline readout applies the class's max time (RES-20).
+        maxTime: c.maxTime || undefined,
         coursePoolIds: poolIdsOf(c.id),
       }));
 
@@ -721,7 +971,8 @@ export const eventRouter = router({
       const where: Record<string, unknown> = {
         eventId: ctx.event.id,
         removed: false,
-        startTime: { gt: 0 },
+        // Relative: a start before ZeroTime is negative (RES-05).
+        startTime: { not: 0 },
       };
       if (input?.classId) {
         const cls = await ctx.db.class.findFirst({
@@ -764,7 +1015,7 @@ export const eventRouter = router({
    * monotonically increasing values pulled straight from
    * `pg_stat_database` and `pg_stat_activity`.
    */
-  dbStatus: publicProcedure.query(async () => {
+  dbStatus: authedProcedure.query(async () => {
     try {
       // Polled every 3 s by every tab showing the load indicator, so the
       // stats and the active-backend count come back in one round trip.
@@ -888,7 +1139,7 @@ export const eventRouter = router({
     };
   }),
 
-  setRegistrationConfig: manageProcedure
+  setRegistrationConfig: manageRaceProcedure
     .input(
       z.object({
         paymentMethods: z.array(z.string()).optional(),
@@ -939,7 +1190,7 @@ export const eventRouter = router({
     return { webhookUrl: event?.googleSheetsWebhookUrl ?? "" };
   }),
 
-  setGoogleSheetsConfig: manageProcedure
+  setGoogleSheetsConfig: manageRaceProcedure
     .input(z.object({ webhookUrl: z.string() }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.event.update({
@@ -947,6 +1198,9 @@ export const eventRouter = router({
         data: { googleSheetsWebhookUrl: input.webhookUrl },
       });
       clearSheetsCache();
+      // On a venue box the cloud pushes the readouts to the sheet: get the
+      // URL there before the next shipped readout (no-op without a shipper).
+      markVenueSettingsChanged();
       return { ok: true };
     }),
 
@@ -966,7 +1220,7 @@ export const eventRouter = router({
     return { cardFee: event?.cardFeeCents ?? 0 };
   }),
 
-  setCardFee: manageProcedure
+  setCardFee: manageRaceProcedure
     .input(z.object({ cardFee: z.number().int().min(0) }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.event.update({
@@ -984,7 +1238,7 @@ export const eventRouter = router({
     return { kioskKey: row?.kioskKey ?? null };
   }),
 
-  regenerateKioskKey: manageProcedure.mutation(async ({ ctx }) => {
+  regenerateKioskKey: manageRaceProcedure.mutation(async ({ ctx }) => {
     const kioskKey = randomBytes(24).toString("base64url");
     await ctx.db.event.update({
       where: { id: ctx.event.id },
@@ -1005,6 +1259,7 @@ function toEventInfo(
     date: Date;
     kind: string;
     kindCustom: string;
+    isTestEvent: boolean;
     eventorEnv: string;
     eventorEventId: bigint | null;
   },
@@ -1018,6 +1273,7 @@ function toEventInfo(
     nameId: row.nameId,
     kind: isEventKind(row.kind) ? row.kind : "competition",
     kindCustom: row.kindCustom,
+    isTestEvent: row.isTestEvent,
     eventorEnv: row.eventorEnv as "prod" | "test" | undefined,
     eventorEventId: row.eventorEventId ? Number(row.eventorEventId) : undefined,
     classificationId,

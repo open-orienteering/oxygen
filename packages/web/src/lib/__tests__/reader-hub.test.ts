@@ -116,6 +116,16 @@ describe("ReaderHub event forwarding", () => {
     expect(removed).toEqual([{ readerId: "a" }]);
   });
 
+  it("forwards a failed read with the reader id", () => {
+    const hub = new ReaderHub();
+    const a = new FakeReader("a");
+    hub.add(a);
+    const failed = listen(hub, "si:card-read-failed");
+    const detail = { cardNumber: 2220164, cardType: "SI8", reason: "timeout", blocksReceived: 1, blocksExpected: 2 };
+    a.emit("si:card-read-failed", detail);
+    expect(failed).toEqual([{ ...detail, readerId: "a" }]);
+  });
+
   it("records when each reader last produced a readout", () => {
     const hub = new ReaderHub();
     const a = new FakeReader("a");

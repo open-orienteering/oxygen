@@ -26,6 +26,7 @@ import {
   getPaperDimensions,
   groupSites,
   mapTemplateSettingsSchema,
+  nearestGroupIndex,
   paperOrientationSchema,
   paperSizeSchema,
   pickAutoTemplate,
@@ -643,4 +644,81 @@ export async function moveToSetter(
   await db.courseMap.update({ where: { id: from.id }, data: { props: json({ ...fromProps, controlIds: fromProps.controlIds.filter((id) => id !== control.id) }), version: v1 } });
   await db.courseMap.update({ where: { id: to.id }, data: { props: json({ ...toProps, controlIds: [...toProps.controlIds, control.id] }), version: v2 } });
   return { from: from.seq, to: to.seq, sheets: [{ seq: from.seq, version: v1.toString() }, { seq: to.seq, version: v2.toString() }] };
+}
+
+/** A scope with setter maps and the sites of it that are in none of its groups (CRS-002). */
+export interface SetterUnassigned {
+  /** The course's uuid; null = the event scope. */
+  courseUuid: string | null;
+  sites: SiteRow[];
+}
+
+/**
+ * The scopes with setter maps whose sites (`setterScopeSites`) are not all in a group (docs/course-layout.md §8
+ * "Controls added after generation"): `setterMaps` writes the groups once, so a control created or added to a
+ * course afterwards is in none and no setter map would print it. Scopes with nothing missing, and scopes without
+ * setter maps, are absent. `opts.courseUuid` (null = the event scope) limits the check to one scope.
+ */
+export async function setterUnassigned(db: Db, eventId: bigint, opts: { courseUuid?: string | null } = {}): Promise<SetterUnassigned[]> {
+  const rows = await db.courseMap.findMany({ where: {
+      eventId,
+      kind: "setter",
+      ...(opts.courseUuid !== undefined ? { courseId: opts.courseUuid } : {}),
+      // A removed course's setter maps report nothing (course.delete only soft-deletes; `setterScopeSites` would throw).
+      OR: [{ courseId: null }, { course: { removed: false } }],
+    },
+    select: { courseId: true, props: true },
+  });
+  const grouped = new Map<string | null, Set<string>>();
+  for (const r of rows) {
+    const set = grouped.get(r.courseId) ?? new Set<string>();
+    for (const id of setterSheetPropsSchema.safeParse(r.props).data?.controlIds ?? []) set.add(id);
+    grouped.set(r.courseId, set);
+  }
+  const out: SetterUnassigned[] = [];
+  for (const [courseUuid, members] of grouped) {
+    const sites = (await setterScopeSites(db, eventId, courseUuid)).filter((s) => !members.has(s.id));
+    if (sites.length > 0) out.push({ courseUuid, sites: sites.sort((a, b) => publicControlId(a) - publicControlId(b)) });
+  }
+  return out;
+}
+
+export interface AdoptedSetters {
+  sheets: Array<{ seq: number; version: string; added: number[] }>;
+}
+
+/**
+ * `layout.adoptToSetters { courseId? }` (CRS-002, docs/course-layout.md §8): each of the scope's sites that is in no
+ * setter map joins the setter map whose group centroid is nearest (`nearestGroupIndex`; a tie goes to the lower
+ * setter number). Same lock as `moveToSetter`; changed rows get a new version, windows stay until *Recalculate*.
+ */
+export async function adoptToSetters(db: Db, eventId: bigint, opts: { courseUuid: string | null }): Promise<AdoptedSetters> {
+  await db.$queryRaw`SELECT "id" FROM "oxygen"."course_maps" WHERE "event_id" = ${eventId} AND "kind" = 'setter' FOR UPDATE`;
+  const [missing] = await setterUnassigned(db, eventId, { courseUuid: opts.courseUuid });
+  if (!missing) return { sheets: [] };
+  const scope = (await db.courseMap.findMany({ where: { eventId, kind: "setter", courseId: opts.courseUuid } }))
+    .flatMap((r) => {
+      // A row whose props do not parse is left alone, not rewritten.
+      const props = setterSheetPropsSchema.safeParse(r.props).data;
+      return props ? [{ row: r, props }] : [];
+    })
+    .sort((a, b) => a.props.setter - b.props.setter || a.row.seq - b.row.seq);
+  // No setter map of the scope parses: there is nothing to add the controls to.
+  if (scope.length === 0) return { sheets: [] };
+  const controls = new Map((await db.control.findMany({ where: { eventId, removed: false } })).map((c) => [c.id, c]));
+  const groups = scope.map((g) => g.props.controlIds.flatMap((id) => (controls.has(id) && placed(controls.get(id)!) ? [{ x: controls.get(id)!.xpos, y: controls.get(id)!.ypos }] : [])));
+  const added = scope.map(() => [] as SiteRow[]);
+  for (const site of missing.sites) {
+    const i = nearestGroupIndex({ x: site.xpos, y: site.ypos }, groups);
+    added[i].push(site);
+    groups[i].push({ x: site.xpos, y: site.ypos });
+  }
+  const out: AdoptedSetters = { sheets: [] };
+  for (const [i, g] of scope.entries()) {
+    if (added[i].length === 0) continue;
+    const version = nextObjectVersion();
+    await db.courseMap.update({ where: { id: g.row.id }, data: { props: json({ ...g.props, controlIds: [...g.props.controlIds, ...added[i].map((s) => s.id)] }), version } });
+    out.sheets.push({ seq: g.row.seq, version: version.toString(), added: added[i].map((s) => publicControlId(s)) });
+  }
+  return out;
 }

@@ -35,6 +35,10 @@ async function openDrawPanel(page: import("@playwright/test").Page) {
     page.getByRole("heading", { name: "Draw Start Times" }),
   ).toBeVisible({ timeout: 5000 });
   const panel = page.getByTestId("draw-panel");
+  // The seed's classes are already drawn, so none is preselected (RES-03);
+  // select them all for the tests below.
+  await expect(panel.getByText(/0 class/)).toBeVisible({ timeout: 10000 });
+  await panel.getByRole("button", { name: "All", exact: true }).click();
   await expect(panel.getByText(/3 class/)).toBeVisible({ timeout: 10000 });
   return panel;
 }
@@ -55,10 +59,15 @@ test.describe("Start Draw", () => {
     await expect(page.getByTestId("draw-execute-btn")).toBeEnabled();
 
     await page.getByTestId("draw-execute-btn").click();
+    // The classes already have start times: Apply asks first.
+    await expect(page.getByTestId("draw-confirm")).toBeVisible();
+    await page.getByTestId("draw-confirm-btn").click();
     await expect(panel.getByText("Draw complete")).toBeVisible({
       timeout: 15000,
     });
     await expect(panel.getByText(/runner.*assigned start times/)).toBeVisible();
+    // Finished runners keep their start (RES-03).
+    await expect(page.getByTestId("draw-complete-detail")).toContainText(/keep their start times/);
 
     await panel.getByRole("button", { name: "Close", exact: true }).click();
     await expect(
@@ -157,5 +166,39 @@ test.describe("Start Draw", () => {
     for (let i = 0; i < count; i++) {
       await expect(intervalInputs.nth(i)).toHaveValue("3:00");
     }
+  });
+
+  test("does not preselect drawn classes and flags started ones", async ({ page }) => {
+    await selectCompetition(page);
+    await tabButton(page, "Start List").click();
+    await page.getByTestId("draw-start-times-btn").click();
+    const panel = page.getByTestId("draw-panel");
+    await expect(panel.getByText(/0 class/)).toBeVisible({ timeout: 10000 });
+    await expect(panel.locator("[data-testid^='draw-class-started-']").first()).toBeVisible();
+    await expect(panel.getByTestId("draw-preview-btn")).toBeDisabled();
+  });
+
+  test("asks before replacing start times, and Cancel changes nothing", async ({ page }) => {
+    const panel = await openDrawPanel(page);
+    await page.getByTestId("draw-preview-btn").click();
+    await expect(panel.getByRole("heading", { name: "Preview" })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId("draw-preview-kept")).toContainText(/keep their start times/);
+
+    await page.getByTestId("draw-execute-btn").click();
+    await expect(page.getByTestId("draw-confirm")).toContainText(/replaces the start times of \d+ runners/);
+    await page.getByTestId("draw-confirm-cancel").click();
+    await expect(page.getByTestId("draw-confirm")).toBeHidden();
+    await expect(panel.getByText("Draw complete")).toBeHidden();
+  });
+
+  test("offers to redraw started runners and confirms in stronger words", async ({ page }) => {
+    const panel = await openDrawPanel(page);
+    await page.getByTestId("draw-force").check();
+    await page.getByTestId("draw-preview-btn").click();
+    await expect(panel.getByRole("heading", { name: "Preview" })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId("draw-preview-kept")).toBeHidden();
+    await page.getByTestId("draw-execute-btn").click();
+    await expect(page.getByTestId("draw-confirm")).toContainText(/started or finished/);
+    await page.getByTestId("draw-confirm-cancel").click();
   });
 });

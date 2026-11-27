@@ -29,8 +29,10 @@ export function moveCost(g: RouteGrid, model: CostModel, a: number, b: number, l
 /**
  * `reverse`: the field of costs **to** `origin` from every cell (each
  * move is costed in its running direction, towards the origin).
+ * `stopAt`: the search ends when that cell is settled; its cost and the
+ * path to it are final then, cells farther away are left unreached.
  */
-export function costField(g: RouteGrid, model: CostModel, origin: number, reverse = false): CostField {
+export function costField(g: RouteGrid, model: CostModel, origin: number, reverse = false, stopAt?: number): CostField {
   const n = g.cols * g.rows;
   const cost = new Float64Array(n).fill(Infinity);
   const prev = new Int32Array(n).fill(-1);
@@ -77,6 +79,7 @@ export function costField(g: RouteGrid, model: CostModel, origin: number, revers
     const u = pop();
     if (done[u]) continue;
     done[u] = 1;
+    if (u === stopAt) break;
     const uc = u % g.cols, ur = (u - uc) / g.cols;
     for (let k = 0; k < 8; k++) {
       const vc = uc + DC[k], vr = ur + DR[k];

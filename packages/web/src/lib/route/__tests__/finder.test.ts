@@ -3,6 +3,8 @@
 import { describe, it, expect } from "vitest";
 import { mapDocument, symbolLibrary } from "@oxygen/shared";
 import { S, SYMBOLS } from "@oxygen/shared/src/terrain/graph/__tests__/synthetic.js";
+import { gridField } from "@oxygen/shared/src/terrain/field/__tests__/fixtures.js";
+import { Z_PER_INTERVAL } from "@oxygen/shared/src/terrain/field/types.js";
 import { createRouteFinder, createRouteWorkerState, type RouteWorkerLike, type RouteWorkerRequest, type RouteWorkerResponse } from "../finder";
 
 const rect = (x0: number, y0: number, x1: number, y1: number) => [x0, y0, x1, y0, x1, y1, x0, y1, x0, y0];
@@ -39,6 +41,23 @@ function fakeWorker(log: RouteWorkerRequest["type"][]): RouteWorkerLike {
   };
   return w;
 }
+
+describe("the route worker's heights at the confirmed interval (§0.43)", () => {
+  it("costs a climb at the interval a person confirmed, as the displayed climb is read: 2.5 m is cheaper than 5 m", () => {
+    // A ramp rising 1 m per 3 m cell at the field's own 5 m interval.
+    const field = gridField(200, 50, (cx) => cx * (Z_PER_INTERVAL / 5));
+    const cost = (intervalM: number | undefined) => {
+      const handle = createRouteWorkerState();
+      handle({ type: "doc", key: "d", bytes: bytes(), patch: null });
+      handle({ type: "field", key: "f", field, ...(intervalM !== undefined ? { intervalM } : {}) });
+      const res = handle({ type: "costs", id: 1, docKey: "d", fieldKey: "f", req: { legs: [{ points: [{ x: 1, y: 5 }, { x: 19, y: 5 }] }], groundMPerMm: 15 } });
+      return (res as { costs: number[] }).costs[0];
+    };
+    const at5 = cost(5);
+    expect(cost(undefined)).toBe(at5);
+    expect(cost(2.5)).toBeLessThan(at5);
+  });
+});
 
 describe("the route worker's state (docs/course-elevation.md §7.8)", () => {
   it("a search needs its document; with it the lake is run round", () => {

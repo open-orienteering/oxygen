@@ -12,6 +12,10 @@
  *   si:card-detected SICardDetection        (card inserted, readout starting)
  *   si:card-readout  SICardReadout          (full readout, after the reader's feedback)
  *   si:card-removed  {}
+ *   si:card-read-failed { cardNumber, cardType, reason, blocksReceived, blocksExpected }
+ *                    (a detected card could not be read completely: no readout,
+ *                    no reader feedback beep; reason "timeout" | "removed" |
+ *                    "bad-block" | "parse")
  *   si:reader-info   SIReaderDeviceInfo     (serial/firmware/mode/battery learned or changed)
  */
 

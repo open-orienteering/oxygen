@@ -384,3 +384,51 @@ describe("route alternatives (docs/course-elevation.md §7.7)", () => {
     expect(findRoutes(grid(features), A, B, { model })).toEqual(findRoutes(grid(features), A, B, { model }));
   });
 });
+
+describe("the cost field stops at its target (docs/course-elevation.md §7.7)", () => {
+  const lake = () => grid([area(BLOCKED, rect(17, 8, 23, 32))]);
+  const gap = () => grid([line(BLOCKED, [20.25, 0, 20.25, 30]), line(BLOCKED, [20.25, 32, 20.25, 40])]);
+
+  it.each([["the lake", lake], ["the gap", gap]])("gives the target's cost and path as without a stop, and leaves farther cells unreached (%s)", (_n, make) => {
+    const g = make();
+    const a = cellOf(g, A), b = cellOf(g, B);
+    for (const model of [DEFAULT_COST_MODEL, SHORTEST_COST_MODEL]) {
+      const full = costField(g, model, a);
+      const early = costField(g, model, a, false, b);
+      expect(early.cost[b]).toBe(full.cost[b]);
+      expect(tracePath(early, b)).toEqual(tracePath(full, b));
+      // A cell the full search settles after b stays unreached (Infinity) or, when only relaxed, is never cheaper.
+      let farther = 0;
+      for (let i = 0; i < full.cost.length; i++) {
+        if (full.cost[i] > full.cost[b] && early.cost[i] === Infinity) farther++;
+        expect(early.cost[i]).toBeGreaterThanOrEqual(full.cost[i]);
+      }
+      expect(farther).toBeGreaterThan(0);
+    }
+  });
+
+  it("an unreachable target still ends with nothing", () => {
+    const g = grid([line(BLOCKED, [20.25, 0, 20.25, 40])]);
+    expect(costField(g, DEFAULT_COST_MODEL, cellOf(g, A), false, cellOf(g, B)).cost[cellOf(g, B)]).toBe(Infinity);
+  });
+
+  it("findRoutes finds the same routes as the full fields did (no alternatives, and two alternatives)", () => {
+    const features = [area(BLOCKED_SOFT, rect(17, 11, 23, 29)), area(C.slow, rect(5, 30, 35, 38))];
+    const g = grid(features);
+    for (const alternatives of [0, 2]) {
+      const routes = findRoutes(g, A, B, { model: DEFAULT_COST_MODEL, alternatives });
+      // The oracle: fastest and shortest read from untruncated fields.
+      const fast = costField(g, DEFAULT_COST_MODEL, cellOf(g, A));
+      const short = costField(g, SHORTEST_COST_MODEL, cellOf(g, A));
+      const fastest = routes.find((r) => r.fastest)!;
+      // Straightening may only improve on the cell path.
+      expect(fastest.costM).toBeLessThanOrEqual(fast.cost[cellOf(g, B)] + 1e-6);
+      expect(fastest.costM).toBeGreaterThan(fast.cost[cellOf(g, B)] * 0.9);
+      const shortest = routes.find((r) => r.shortest)!;
+      expect(shortest.lengthM).toBeLessThanOrEqual(short.cost[cellOf(g, B)] + 1e-6);
+      expect(shortest.lengthM).toBeGreaterThan(short.cost[cellOf(g, B)] * 0.9);
+      expect(findRoutes(g, A, B, { model: DEFAULT_COST_MODEL, alternatives })).toEqual(routes);
+    }
+    expect(findRoutes(g, A, B, { model: SHORTEST_COST_MODEL, alternatives: 0 }).length).toBe(1);
+  });
+});

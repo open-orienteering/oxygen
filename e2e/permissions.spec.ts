@@ -1,5 +1,6 @@
 import { test, expect, type Browser, type Page } from "@playwright/test";
 import { uploadEventMap } from "./helpers/map-upload";
+import { trpcProcedures } from "./helpers/trpc";
 
 async function inviteUser(page: Page, email: string) {
   await page.goto("/settings?tab=users");
@@ -132,10 +133,18 @@ test.describe("event permissions", () => {
 
     const path = new URL(kioskHref).pathname + new URL(kioskHref).search;
     const kiosk = await anon.newPage();
+    const requested = new Set<string>();
+    kiosk.on("request", (req) => {
+      for (const procedure of trpcProcedures(req.url())) requested.add(procedure);
+    });
     await kiosk.goto(path);
     await expect(kiosk.getByText("Insert your SI card")).toBeVisible({
       timeout: 15000,
     });
+    // The station prefetch ran (it asks for the control list) but not for the
+    // runner directory dump: that needs race.operate, which a kiosk key lacks.
+    await expect.poll(() => requested.has("control.list"), { timeout: 15000 }).toBe(true);
+    expect(requested.has("eventor.runnerDbDump")).toBe(false);
     await anon.close();
   });
 

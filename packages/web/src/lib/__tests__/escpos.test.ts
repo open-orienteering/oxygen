@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildFinishReceipt, buildRegistrationReceipt } from "../receipt-printer/escpos.js";
+import { formatRunningTime } from "@oxygen/shared";
 import type { FinishReceiptData, RegistrationReceiptData } from "../receipt-printer/types.js";
 
 const SAMPLE: FinishReceiptData = {
@@ -237,6 +238,29 @@ const REG_SAMPLE: RegistrationReceiptData = {
   startTime: "11:30:00",
   payment: { method: "Swish", amount: 15000 },
 };
+
+describe("buildFinishReceipt Fin row (CRS-013)", () => {
+  const finLine = (data: FinishReceiptData) =>
+    Buffer.from(buildFinishReceipt(data))
+      .toString("latin1")
+      .split("\n")
+      .find((l) => /Fin {6}/.test(l)) ?? "";
+
+  it("prints the finish leg, not the last control's split", () => {
+    // Last control at 10:26:08 (cum 26:08), finish 10:42:35: finish leg 16:27.
+    const line = finLine({ ...SAMPLE, finish: { splitTime: 9868, legLength: 1500 } });
+    expect(line).toContain(formatRunningTime(9868));
+    expect(line).not.toContain(formatRunningTime(9060));
+    // Pace from the finish leg's own length.
+    expect(line).not.toMatch(/ {4}-$/);
+  });
+
+  it("leaves the split and pace blank without a finish entry", () => {
+    const line = finLine({ ...SAMPLE, finish: undefined });
+    expect(line).not.toContain(formatRunningTime(9060));
+    expect(line).toMatch(/ {4}-\s*$/);
+  });
+});
 
 describe("buildRegistrationReceipt", () => {
   it("returns a Uint8Array", () => {

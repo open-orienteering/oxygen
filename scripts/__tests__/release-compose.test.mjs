@@ -28,6 +28,31 @@ describe("published-image demo", () => {
     assert.equal(config.services.oxygen.ports[0].published, "18080");
   });
 
+  it("reuses a local image by default and health-checks /ready (DB-33, BLD-09)", () => {
+    const run = (env) =>
+      spawnSync("docker", ["compose", "-f", "docker-compose.release.yml", "config", "--format", "json"], {
+        cwd: ROOT,
+        encoding: "utf8",
+        env,
+      });
+    const clean = { ...process.env };
+    delete clean.OXYGEN_PULL_POLICY;
+    const result = run(clean);
+    assert.equal(result.status, 0, result.stderr);
+    const config = JSON.parse(result.stdout);
+    assert.equal(config.services.migrate.pull_policy, "missing");
+    assert.equal(config.services.oxygen.pull_policy, "missing");
+    assert.match(config.services.oxygen.healthcheck.test.join(" "), /127\.0\.0\.1:8080\/ready/);
+
+    const forced = JSON.parse(run({ ...clean, OXYGEN_PULL_POLICY: "always" }).stdout);
+    assert.equal(forced.services.oxygen.pull_policy, "always");
+  });
+
+  it("leads its header with a pinned vX.Y.Z", () => {
+    const header = readFileSync(path.join(ROOT, "docker-compose.release.yml"), "utf8").split("\nservices:")[0];
+    assert.ok(header.indexOf("vX.Y.Z") < header.indexOf("stable"));
+  });
+
   it("requires neither pnpm nor a source image build", () => {
     const script = readFileSync(path.join(ROOT, "scripts/demo.sh"), "utf8");
     const commands = script
@@ -51,7 +76,8 @@ describe("published-image demo", () => {
     assert.ok(existsSync(path.join(ROOT, "packages/api/src/cli/map-rematch.ts")));
     // The source row travels on psql's stdin; the map file is the committed one.
     assert.match(loader, /decode\('[^\n]*\n\s*base64 < "\$MAP_FILE"/);
-    assert.match(loader, /puit-de-laven-demo\.omap/);
+    assert.match(loader, /MAP_FILE="\$REPO_ROOT\/fixtures\/okartan\/okartan-demo\.ocd"/);
+    assert.match(loader, /\nMAP_KIND="ocad" /, "map_sources.kind of the demo map (scripts/lib/showcase-map.mjs DEMO_MAP_KIND)");
   });
 
   it("installs OpenSSL before Prisma dependencies", () => {

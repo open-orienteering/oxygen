@@ -70,3 +70,43 @@ export function makeSyncHeaders(
     authorization: `Bearer ${await (injectedFetcher ?? defaultFetcher)(audience)}`,
   });
 }
+
+/**
+ * One startup line for a venue node: is IAP auth on, and is the key file the
+ * audience needs actually readable? A misconfigured box otherwise only shows
+ * itself as 401s from the cloud at the arena (docs/ops/venue-runbook.md).
+ */
+export function describeSyncAuth(
+  env: Record<string, string | undefined>,
+  canRead: (path: string) => boolean,
+): { level: "info" | "warn"; message: string } {
+  const audience = env.SYNC_GOOGLE_AUDIENCE?.trim();
+  const keyPath = env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
+  if (audience && !keyPath) {
+    return {
+      level: "warn",
+      message:
+        "[sync] SYNC_GOOGLE_AUDIENCE is set but GOOGLE_APPLICATION_CREDENTIALS is not: no ID token can be minted, the cloud's IAP will reject sync calls. Set VENUE_SA_KEY in .env.venue.",
+    };
+  }
+  if (audience && keyPath && !canRead(keyPath)) {
+    return {
+      level: "warn",
+      message: `[sync] IAP auth is configured but the key file ${keyPath} is missing or unreadable (the container runs as uid 1000: chown 1000, chmod 400): sync calls will be rejected by IAP.`,
+    };
+  }
+  if (!audience && keyPath) {
+    return {
+      level: "warn",
+      message:
+        "[sync] GOOGLE_APPLICATION_CREDENTIALS is set but SYNC_GOOGLE_AUDIENCE is not: no ID token is sent, an IAP-protected cloud will reject sync calls. Set SYNC_GOOGLE_AUDIENCE in .env.venue.",
+    };
+  }
+  if (audience) {
+    return { level: "info", message: "[sync] IAP auth on: sync calls carry a Google ID token." };
+  }
+  return {
+    level: "info",
+    message: "[sync] IAP auth off: sync calls carry the shared secret only (the cloud must not be behind IAP).",
+  };
+}

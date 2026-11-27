@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { PyRandom } from "../lib/py-random.mjs";
 import { DEMO_NOTE, DEMO_SEED, INJECTED_TAG, INJECTION_PLAN, analyseOmap, injectDemoPoints } from "../lib/inject-demo-points.mjs";
-import { DEMO_MAP_PATH, ORIGINAL_MAP, ORIGINAL_MAP_PATH, buildDemoMap, sha256Hex } from "../lib/showcase-map.mjs";
+import { DEMO_MAP_PATH, ORIGINAL_MAP, ORIGINAL_MAP_PATH, buildDemoMap } from "../lib/puit-de-laven.mjs";
+import { sha256Hex } from "../lib/showcase-map.mjs";
 
 // The Demo Competition's map (docs/ops/demo.md, "The map"): the CC0 Puit de
 // Laven map plus invented point features, made by a seeded injection.
@@ -42,7 +43,7 @@ describe("demo map injection", () => {
 
   it("reproduces the committed demo map, the approved placement, byte for byte", () => {
     const committed = readFileSync(DEMO_MAP_PATH);
-    assert.ok(buildDemoMap().equals(committed), "run `node scripts/patch-showcase-map.mjs` after changing the injection");
+    assert.ok(buildDemoMap().equals(committed), "run `node scripts/inject-demo-points.mjs` after changing the injection");
     // The placement the user approved (made with the Python original, seed 42).
     assert.equal(sha256Hex(committed), "dfd0b69b1362a068bde8ac4b1d1fef58717db43cf33d8036339c53908c12c3dc");
   });

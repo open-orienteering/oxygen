@@ -21,6 +21,8 @@ import { IconMap } from "../../components/map-icons";
 import { NorthLinesBadge } from "../../components/NorthLinesBadge";
 import { ClubMapPicker } from "../../components/ClubMapPicker";
 import { useMapReplace } from "../../components/useMapReplace";
+import { ContourIntervalRow } from "./ContourInterval";
+import { useOpenMapInfoRequest } from "./contourIntervalState";
 import { mapInfoRows, type MapInfoInput, type MapInfoRow } from "../../lib/editor/map-info";
 
 const LABEL = "w-24 shrink-0 text-slate-500";
@@ -36,6 +38,8 @@ export function MapInfoButton({ map }: { map: MapInfoInput }) {
   const [open, setOpen] = useState(false);
   const replace = useMapReplace();
   const buttonRef = useRef<HTMLButtonElement>(null);
+  // The interval's Confirm in the course-info popover and the banner ask for this dialog (docs/course-elevation.md §0.43).
+  useOpenMapInfoRequest(useCallback(() => setOpen(true), []));
   // Focus is not handed back to the icon: the editor's Enter (§6.1, it puts an armed tool away) would press it.
   const close = useCallback(() => {
     setOpen(false);
@@ -139,6 +143,7 @@ function MapInfoDialog({ map, replace, onClose }: { map: MapInfoInput; replace: 
           <div className="px-5 py-3 space-y-3 text-xs">
             <dl className="space-y-1.5">
               {scaleRow && row(scaleRow)}
+              <ContourIntervalRow labelClass={LABEL} />
               <div data-testid="editor-map-info-north" className="flex items-center gap-3">
                 <dt className={LABEL}>{t("mapInfoNorth")}</dt>
                 <dd className="min-w-0">

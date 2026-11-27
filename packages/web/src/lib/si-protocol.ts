@@ -1,3 +1,4 @@
+import { DAY_DS } from "@oxygen/shared";
 /**
  * SportIdent Protocol Library
  *
@@ -88,6 +89,47 @@ export const BLOCKS_TO_READ: Record<string, number> = {
   SI11: 8,
   SIAC: 8,
 };
+
+/**
+ * Memory layout of the punch area per card series, keyed by the low nibble of
+ * block 0 byte 24. Offsets are into the concatenated card image (block 0 at 0).
+ * Evidence per row: docs/si-protocol/card-layouts.md.
+ */
+export interface SICardLayout {
+  firstPunch: number;
+  recordSize: number;
+  maxPunches: number;
+}
+
+export const SI_CARD_LAYOUT: Record<number, SICardLayout> = {
+  1: { firstPunch: 56, recordSize: 4, maxPunches: 50 }, // SI9
+  2: { firstPunch: 136, recordSize: 4, maxPunches: 30 }, // SI8
+  4: { firstPunch: 176, recordSize: 4, maxPunches: 20 }, // pCard
+  15: { firstPunch: 512, recordSize: 4, maxPunches: 128 }, // SI10 / SI11 / SIAC
+};
+
+/** Series nibble implied by the card-number range, for cards with an unknown series byte. */
+const SERIES_BY_TYPE: Partial<Record<SICardType, number>> = {
+  SI9: 1,
+  SI8: 2,
+  pCard: 4,
+  SI10: 15,
+  SI11: 15,
+  SIAC: 15,
+};
+
+/**
+ * Layout for a block 0, or null when the card cannot be decoded safely
+ * (tCard, or a series and number range that match nothing).
+ */
+function resolveCardLayout(b0: Uint8Array, cardNumber: number): SICardLayout | null {
+  const series = b0[24] & 0x0f;
+  if (series === 6) return null; // tCard: record format not known, fail safe
+  const direct = SI_CARD_LAYOUT[series];
+  if (direct) return direct;
+  const viaType = SERIES_BY_TYPE[getCardType(cardNumber)];
+  return viaType !== undefined ? SI_CARD_LAYOUT[viaType] : null;
+}
 
 export function getCardType(cardNumber: number): SICardType {
   if (cardNumber < 1) return "Unknown";
@@ -249,10 +291,18 @@ export function extractFrame(
     const calcCrc = calculateCRC(crcData);
     const recvCrc = (buf[4 + len] << 8) | buf[5 + len];
 
+    // The extended form has no ETX to prove the length byte was sane, so a
+    // CRC mismatch means the STX was noise or the length was damaged. Do not
+    // swallow `len` bytes of whatever follows (a real frame may start inside
+    // them): skip this STX and look for the next one.
+    if (calcCrc !== recvCrc) {
+      return extractFrame(buffer.subarray(stxIdx + 1));
+    }
+
     // Consume optional ETX
     const consumed = buf.length > frameLen && buf[frameLen] === ETX ? frameLen + 1 : frameLen;
     return {
-      frame: { cmd, data, isExtended: true, crcValid: calcCrc === recvCrc },
+      frame: { cmd, data, isExtended: true, crcValid: true },
       remaining: buffer.subarray(stxIdx + consumed),
     };
   }
@@ -371,6 +421,16 @@ export function parseDayOfWeek(ptdByte: number): number | null {
 }
 
 /**
+ * Card seconds since midnight to absolute deciseconds, wrapped into one day.
+ * A corrupt or 12/24-hour-confused card time (the 16-bit field plus the PM
+ * flag reaches 108735 s) would otherwise become a time past midnight that the
+ * server refuses, holding the station queue (RES-24).
+ */
+export function cardSecondsToDs(seconds: number): number {
+  return (((Math.round(seconds * 10)) % DAY_DS) + DAY_DS) % DAY_DS;
+}
+
+/**
  * Parse a 2-byte time from SI card memory.
  *
  * The raw 16-bit value (PTH << 8 | PTL) represents seconds since midnight/noon
@@ -411,6 +471,33 @@ export function parsePunchRecord(
   if (time === null) return null;
 
   return { controlCode, time };
+}
+
+/**
+ * Decode one 4-byte punch slot of an SI8+ card image.
+ *
+ * Slots are consumed by position, never skipped: the card stores records at
+ * fixed offsets and the counter byte can include blank slots (a real SI8 had
+ * counter 27 with records 1-5 blank). The caller advances one slot per call
+ * whatever this returns.
+ *
+ *   - EEEEEEEE or 00000000 -> blank, null
+ *   - control code 0       -> null (not a punch)
+ *   - code with time EEEE  -> kept as { controlCode, time: 0 }
+ *   - otherwise            -> the punch
+ */
+export function parsePunchSlot(data: Uint8Array, offset: number): SIPunch | null {
+  if (offset + 4 > data.length) return null;
+  const b0 = data[offset];
+  const b1 = data[offset + 1];
+  const b2 = data[offset + 2];
+  const b3 = data[offset + 3];
+  if (b0 === 0xee && b1 === 0xee && b2 === 0xee && b3 === 0xee) return null;
+  if (b0 === 0 && b1 === 0 && b2 === 0 && b3 === 0) return null;
+  const controlCode = ((b0 & 0xc0) << 2) | b1;
+  if (controlCode === 0) return null;
+  const time = parsePunchTime(data, offset + 2);
+  return { controlCode, time: time ?? 0 };
 }
 
 // ─── CP850 decoding ────────────────────────────────────────
@@ -803,23 +890,26 @@ export function resolveSI5Times(
 }
 
 /**
- * Parse SI8/SI9/pCard/tCard card data from readout blocks.
- * These cards have punches starting at block 0 offset 32.
+ * Parse SI8/SI9/pCard card data from two readout blocks (256 bytes).
  *
- * Block 0 layout (SI8/SI9):
+ * Block 0 header (all card series from SI8 up):
  *   [4-7]   Clear station + time
  *   [8-11]  Check station + time
  *   [12-15] Start station + time
  *   [16-19] Finish station + time
- *   [22]    Number of punches
- *   [24]    Card series byte (0x02=SI8, 0x01=SI9, etc.)
+ *   [22]    Punch counter (can include blank slots)
+ *   [24]    Series, low nibble (1=SI9, 2=SI8, 4=pCard, 6=tCard, 15=SI10/11/SIAC)
  *   [25-27] Card number (3 bytes, big-endian)
- *   [32+]   Punch records (4 bytes each, up to 24 in block 0)
+ *   [32..]  Owner data area, NOT punches
  *
- * Block 1+: Punch records (32 per block)
+ * Punch slots are 4 bytes each, starting at a series-specific offset into the
+ * concatenated image (SI_CARD_LAYOUT): SI9 56, SI8 136, pCard 176. The reader
+ * transfers the card in 128-byte blocks, so blocks 0 and 1 are joined first.
+ * tCard (series 6) is not decoded; the result is null so the caller reports a
+ * failed read instead of wrong punches.
  */
 export function parseSI8CardData(blocks: Uint8Array[]): SICardReadout | null {
-  if (blocks.length === 0 || blocks[0].length < 128) return null;
+  if (blocks.length < 2 || blocks[0].length < 128 || blocks[1].length < 128) return null;
 
   const b0 = blocks[0];
 
@@ -829,6 +919,10 @@ export function parseSI8CardData(blocks: Uint8Array[]): SICardReadout | null {
     cn = (b0[24] << 16) | (b0[25] << 8) | b0[26];
     if (cn === 0) return null;
   }
+
+  const layout = resolveCardLayout(b0, cn);
+  // Large cards need eight blocks and go through parseSI10CardData.
+  if (!layout || layout.firstPunch + layout.maxPunches * layout.recordSize > 256) return null;
 
   const cardType = getCardType(cn);
   const punchCount = b0[22];
@@ -843,24 +937,14 @@ export function parseSI8CardData(blocks: Uint8Array[]): SICardReadout | null {
   const checkDayOfWeek = checkTime != null ? parseDayOfWeek(b0[8]) : null;
   const finishDayOfWeek = finishTime != null ? parseDayOfWeek(b0[16]) : null;
 
-  // Parse punches — SI8: block 0 offset 32, then block 1+ offset 0
+  const image = new Uint8Array(256);
+  image.set(b0.subarray(0, 128), 0);
+  image.set(blocks[1].subarray(0, 128), 128);
+  const slots = Math.min(punchCount, layout.maxPunches);
   const punches: SIPunch[] = [];
-  for (let bi = 0; bi < blocks.length && punches.length < punchCount; bi++) {
-    const block = blocks[bi];
-    const startOffset = bi === 0 ? 32 : 0;
-    const punchesInBlock = Math.floor((block.length - startOffset) / 4);
-
-    for (
-      let pi = 0;
-      pi < punchesInBlock && punches.length < punchCount;
-      pi++
-    ) {
-      const offset = startOffset + pi * 4;
-      const punch = parsePunchRecord(block, offset);
-      if (punch) {
-        punches.push(punch);
-      }
-    }
+  for (let k = 0; k < slots; k++) {
+    const punch = parsePunchSlot(image, layout.firstPunch + k * layout.recordSize);
+    if (punch) punches.push(punch);
   }
 
   return {
@@ -917,31 +1001,22 @@ export function parseSI10CardData(
   const personalBlocks = allBlocks.slice(0, Math.min(allBlocks.length, 4));
   const ownerData = parseSI10PersonalData(personalBlocks);
 
-  // Parse punches from blocks 4+ (each block holds 32 punches at 4 bytes each)
+  // Punch slot k lives in block 4 + floor(k/32) at offset (k%32)*4. The
+  // counter can include blank slots and records beyond it are stale, so read
+  // exactly min(counter, 128) slots and consume blanks by position.
+  const slots = Math.min(punchCount, SI_CARD_LAYOUT[15].maxPunches);
+  const neededBlocks = slots === 0 ? 0 : 4 + Math.floor((slots - 1) / 32) + 1;
+  if (allBlocks.length < neededBlocks) return null;
   const punches: SIPunch[] = [];
-  for (
-    let bi = 4;
-    bi < allBlocks.length && punches.length < punchCount;
-    bi++
-  ) {
-    const block = allBlocks[bi];
-    const punchesInBlock = Math.floor(block.length / 4);
-    for (
-      let pi = 0;
-      pi < punchesInBlock && punches.length < punchCount;
-      pi++
-    ) {
-      const punch = parsePunchRecord(block, pi * 4);
-      if (punch) {
-        punches.push(punch);
-      }
-    }
+  for (let k = 0; k < slots; k++) {
+    const block = allBlocks[4 + (k >> 5)];
+    if (!block || block.length < 128) return null;
+    const punch = parsePunchSlot(block, (k % 32) * 4);
+    if (punch) punches.push(punch);
   }
 
   // Extract battery voltage from block 3, offset 71 (SIAC only).
-  // The raw byte encodes voltage as: V = 1.9 + raw * 0.09
   // This may be from a previous measurement; 0xEE = no data.
-  // Extract battery voltage from block 3, offset 71 (SIAC only).
   // The raw byte encodes voltage as: V = 1.9 + raw * 0.09
   let batteryVoltage: number | null = null;
   let metadata: SICardMetadata | null = null;
@@ -1676,6 +1751,28 @@ export interface ReadoutBackupRecord {
   card: SICardReadout;
 }
 
+/** A non-empty backup slot that could not be decoded into a card readout. */
+export interface SkippedBackupSlot {
+  /** Flash address of the slot (or 128-byte chunk) that was skipped. */
+  slotAddress: number;
+  /** Why it was skipped. */
+  reason: "parse-failed" | "not-si5" | "no-siid" | "overrun";
+  /** The raw bytes of the slot, hex encoded, so nothing is lost. */
+  rawBytesHex: string;
+}
+
+export interface ReadoutBackupParseResult {
+  records: ReadoutBackupRecord[];
+  /** Non-empty slots that were not decoded. Never erase the station while this is non-empty. */
+  skipped: SkippedBackupSlot[];
+}
+
+function bytesToHex(b: Uint8Array): string {
+  let out = "";
+  for (let i = 0; i < b.length; i++) out += b[i].toString(16).padStart(2, "0");
+  return out;
+}
+
 /**
  * Parse a readout-station backup-memory buffer into card readout records.
  *
@@ -1704,7 +1801,29 @@ export function parseReadoutBackupBuffer(
   baseAddr: number = 0x100,
   now?: Date,
 ): ReadoutBackupRecord[] {
+  return parseReadoutBackupBufferDetailed(buf, baseAddr, now).records;
+}
+
+/**
+ * Same walk as `parseReadoutBackupBuffer`, but also reports every non-empty
+ * slot that could not be decoded (address + raw bytes). The caller must not
+ * erase the station's flash while any slot was skipped: the erase would
+ * destroy the only copy of a card that was never imported.
+ */
+export function parseReadoutBackupBufferDetailed(
+  buf: Uint8Array,
+  baseAddr: number = 0x100,
+  now?: Date,
+): ReadoutBackupParseResult {
   const records: ReadoutBackupRecord[] = [];
+  const skipped: SkippedBackupSlot[] = [];
+  const skip = (off: number, len: number, reason: SkippedBackupSlot["reason"]) => {
+    skipped.push({
+      slotAddress: baseAddr + off,
+      reason,
+      rawBytesHex: bytesToHex(buf.subarray(off, Math.min(off + len, buf.length))),
+    });
+  };
   const STEP = 0x80;
   let off = 0;
   while (off + STEP <= buf.length) {
@@ -1724,6 +1843,7 @@ export function parseReadoutBackupBuffer(
         : cnPrimary;
       if (cn === 0) {
         siLog(`ReadoutBackup @0x${(baseAddr + off).toString(16)}: SI8+ marker but no SIID, skipping`);
+        skip(off, STEP, "no-siid");
         off += STEP;
         continue;
       }
@@ -1732,6 +1852,7 @@ export function parseReadoutBackupBuffer(
       const slotSize = slotBlocks * 128;
       if (off + slotSize > buf.length) {
         console.warn(`[SI] ReadoutBackup @0x${(baseAddr + off).toString(16)}: slot would overrun buffer (need ${slotSize}, have ${buf.length - off}), skipping`);
+        skip(off, STEP, "overrun");
         off += STEP;
         continue;
       }
@@ -1758,23 +1879,42 @@ export function parseReadoutBackupBuffer(
         });
       } else {
         console.warn(`[SI] ReadoutBackup @0x${(baseAddr + off).toString(16)}: SI8+ slot parser returned null for cardNo=${cn} (${cardType})`);
+        skip(off, slotSize, "parse-failed");
       }
       off += slotSize;
     } else {
       // Try SI5: parse the 128-byte chunk and accept iff cardNumber > 0.
+      // Anything that is not an SI8+ slot lands here, including owner text and
+      // leftovers of a damaged slot. Accept only what a real SI5 image looks
+      // like: punch pointer (byte 23) at most 37, series (byte 6) 0-4, and a
+      // number in the SI5 range. Everything else is skipped, not filed as a card.
+      if (chunk[23] > 37 || chunk[6] > 4) {
+        siLog(`ReadoutBackup @0x${(baseAddr + off).toString(16)}: not an SI5 image, skipping`);
+        skip(off, STEP, "not-si5");
+        off += STEP;
+        continue;
+      }
       const card = parseSI5CardData([chunk], now);
-      if (card && card.cardNumber > 0) {
+      if (card && card.cardNumber > 0 && card.cardType === "SI5") {
         records.push({
           slotAddress: baseAddr + off,
           readAtRaw: new Uint8Array(chunk.subarray(0, 4)),
           rawBytes: new Uint8Array(chunk),
           card,
         });
+      } else {
+        skip(off, STEP, "not-si5");
       }
       off += STEP;
     }
   }
-  return records;
+  // A partial tail (buffer length not a multiple of the step) is never
+  // walked above; anything but erased flash (0xEE) in it is an undecoded slot.
+  if (off < buf.length && !isEmptyBackupChunk(buf.subarray(off))) {
+    siLog(`ReadoutBackup @0x${(baseAddr + off).toString(16)}: non-empty partial tail, skipping`);
+    skip(off, buf.length - off, "overrun");
+  }
+  return { records, skipped };
 }
 
 /** True if every byte in the chunk is 0xEE (the empty-flash sentinel). */

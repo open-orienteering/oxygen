@@ -100,7 +100,9 @@ export function isFinished(
   finishTime: number,
 ): boolean {
   if (RACE_RESULT_STATUSES.includes(status)) return true;
-  return status === RunnerStatus.Unknown && finishTime > 0;
+  // `!== 0`, not `> 0`: callers pass stored relative times too, which are
+  // negative for a finish before ZeroTime (RES-05).
+  return status === RunnerStatus.Unknown && finishTime !== 0;
 }
 
 /** i18n translation keys produced by {@link runnerStatusKey} */
@@ -333,6 +335,8 @@ export interface EventInfo {
   kind: EventKind;
   /** User-defined label when `kind === "other"`. */
   kindCustom: string;
+  /** A throwaway event the Test Lab may fill with synthetic data. */
+  isTestEvent: boolean;
   /** The Eventor environment this event is linked to, if any */
   eventorEnv?: EventorEnvironment;
   /** Eventor event ID. Used to build QR links on receipts. */
@@ -380,6 +384,8 @@ export interface ClassInfo {
   freeStart?: boolean;
   /** Class runs without timing. */
   noTiming?: boolean;
+  /** Maximum running time in deciseconds; absent = no limit. */
+  maxTime?: number;
   /**
    * The class's stage-0 variant pool: its variant child courses' seqs in
    * key order, `[]` for a plain class (docs/course-controls-and-matching.md
@@ -501,6 +507,21 @@ export interface RunnerInfo {
    * contains NoTiming or BadNoTiming positions.
    */
   runningTimeAdjustment?: number;
+  /**
+   * The runner's current value differs from what Eventor last said
+   * (docs/system/eventor-sync.md); the row badge and the `eventor` filter.
+   */
+  differsFromEventor?: boolean;
+  /** The last Eventor sync saw the runner missing from Eventor. */
+  goneFromEventor?: boolean;
+}
+
+/** One field where a runner differs from Eventor's last value. */
+export interface RunnerEventorDiff {
+  field: "name" | "cardNo" | "classId" | "club" | "birthYear" | "sex" | "nationality";
+  /** Shown values (a class by name, a club by name). */
+  local: string | number | null;
+  eventor: string | number | null;
 }
 
 /** Runner detail (for editing) */
@@ -532,6 +553,10 @@ export interface RunnerDetail {
   courseId: number;
   /** The variant's key when `courseId` is a materialised variant, else null. */
   variantKey: string | null;
+  /** Where the runner differs from Eventor's last value (empty without a sync snapshot). */
+  eventorDiff?: RunnerEventorDiff[];
+  /** The last Eventor sync saw the runner missing from Eventor. */
+  goneFromEventor?: boolean;
 }
 
 /** Input for creating/updating a runner */
@@ -1125,6 +1150,22 @@ export interface DrawPreviewEntry {
   startNo: number;
 }
 
+/**
+ * Which runners a draw touches (review RES-03).
+ * - `all`: every runner in the selected classes, except those who have
+ *   started (finish time, a status, a read card or a punch) unless `force`.
+ * - `onlyMissing`: only runners without a start time (late entries); they
+ *   are appended after the class's last kept start, and the class's first
+ *   start and interval are left as they are.
+ */
+export type DrawMode = "all" | "onlyMissing";
+
+export interface DrawOptions {
+  mode: DrawMode;
+  /** Also redraw runners who have started or finished. */
+  force: boolean;
+}
+
 export interface DrawPreviewClass {
   classId: number;
   className: string;
@@ -1134,11 +1175,33 @@ export interface DrawPreviewClass {
   /** Interval used for this class — the width of each runner's start slot. */
   interval: number;
   entries: DrawPreviewEntry[];
+  /** Runners who have started or finished and keep their start time. */
+  skippedStarted: number;
+  /** Drawn runners who already had a start time that the draw replaces. */
+  replaced: number;
 }
 
 export interface DrawPreviewResult {
   classes: DrawPreviewClass[];
   warnings: string[];
+  /**
+   * Problems that make Apply impossible (a start exactly at ZeroTime, starts
+   * past 24:00). `execute` refuses while any is present.
+   */
+  blockers: string[];
+  /**
+   * The seed the draw was made with. `execute` takes it back so the applied
+   * draw is exactly the previewed one (RES-15).
+   */
+  seed: number;
+  /**
+   * Fingerprint of the previewed result. `execute` recomputes the draw and
+   * refuses with "preview is stale" if anything changed in between.
+   */
+  previewToken: string;
+  /** Totals over all classes. */
+  skippedStarted: number;
+  replaced: number;
 }
 
 /**

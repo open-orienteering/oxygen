@@ -44,10 +44,10 @@ jobs:
         run: |
           IMAGE="${IMAGE,,}"
           SHA_TAG="$(node scripts/ghcr-ref.mjs sha-tag "${GITHUB_SHA}")"
-          SOURCE="${IMAGE}:${SHA_TAG}"
+          SOURCE="${IMAGE}:verified-${SHA_TAG}"
           echo "Inspecting ${SOURCE}…"
           if ! docker buildx imagetools inspect "${SOURCE}" >/dev/null; then
-            echo "::error::No GHCR image ${SOURCE}. Tag vX.Y.Z only on a commit already published from main."
+            echo "::error::No ${SOURCE}: the image smoke has not passed for commit ${GITHUB_SHA} (or it was never published; commits from before the verified- tags exist have none). Tag vX.Y.Z only on a main commit whose publish run is green, or tag a later commit."
             exit 1
           fi
           TAGS=()

@@ -22,14 +22,15 @@ export interface CourseElevationInput {
   nameId: string | null;
 }
 
-export function useCourseElevation({ terrain, active, legs: liveLegs, nameId }: CourseElevationInput): { elevation: CourseElevation; sampler: TerrainSampler | null; field: { key: string; field: HeightField } | null; retry: () => void } {
+export function useCourseElevation({ terrain, active, legs: liveLegs, nameId }: CourseElevationInput): { elevation: CourseElevation; sampler: TerrainSampler | null; field: { key: string; field: HeightField; intervalM?: number } | null; retry: () => void } {
   // The profile follows a drag one render behind: the drag's own frames come first.
   const legs = useDeferredValue(liveLegs);
   const pick = useMemo(() => pickClimbField(terrain), [terrain]);
   const wanted = !!pick && active;
   const { state, retry } = useHeightField(wanted ? pick.url : null, nameId);
   const field = state.status === "ready" ? state.field : null;
-  const sampler = useMemo(() => (field ? fieldSampler(field) : null), [field]);
+  const intervalM = pick?.interval?.m;
+  const sampler = useMemo(() => (field ? fieldSampler(field, intervalM !== undefined ? { intervalM } : {}) : null), [field, intervalM]);
   const profile = useMemo(() => (sampler && legs && legs.length > 0 ? courseProfile(legs, sampler) : null), [sampler, legs]);
   const elevation = useMemo<CourseElevation>(() => {
     if (!wanted || !pick || !legs || legs.length === 0) return { state: "none" };
@@ -41,8 +42,11 @@ export function useCourseElevation({ terrain, active, legs: liveLegs, nameId }: 
       state: "ready", profile, basis: pick.basis,
       attribution: (sampler.provider ?? pick.provider)?.attribution ?? null,
       datum: sampler.datum, groundMPerMm: sampler.groundMPerMm,
+      // A descriptor without an interval (cached, or an older server) reads as unconfirmed (§3).
+      ...(pick.basis === "contours" ? { interval: { confirmed: pick.interval?.confirmed === true, assumedM: terrain?.interval?.assumedM ?? null, m: pick.interval?.m ?? null } } : {}),
     };
-  }, [wanted, pick, legs, state, sampler, profile]);
-  const keyed = useMemo(() => (field && pick ? { key: pick.url, field } : null), [field, pick]);
+  }, [wanted, pick, legs, state, sampler, profile, terrain]);
+  // The key carries the interval, so a changed confirmation sends the heights to the route search again.
+  const keyed = useMemo(() => (field && pick ? { key: intervalM !== undefined ? `${pick.url}@${intervalM}` : pick.url, field, ...(intervalM !== undefined ? { intervalM } : {}) } : null), [field, pick, intervalM]);
   return { elevation, sampler, field: keyed, retry };
 }

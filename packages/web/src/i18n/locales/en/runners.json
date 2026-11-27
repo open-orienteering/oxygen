@@ -36,6 +36,7 @@
   "female": "Female",
   "nameRequired": "Name is required",
   "classRequired": "Class is required",
+  "invalidCardNo": "Enter a valid card number",
   "saving": "Saving...",
   "saved": "Saved",
   "loading": "Loading...",
@@ -126,5 +127,16 @@
   "flagOC": "Out of competition",
   "flagNT": "No timing",
   "flagPayBefore": "Pay before result",
-  "variant": "Variant"
+  "variant": "Variant",
+  "eventor": "Eventor",
+  "eventorDiffers": "Differs from Eventor",
+  "eventorGone": "Gone from Eventor",
+  "eventorBadgeDiffers": "≠ Eventor",
+  "eventorBadgeGone": "Not in Eventor",
+  "eventorValue": "Eventor: {{value}}",
+  "useEventorValue": "Use Eventor's value",
+  "eventorGoneBanner": "This runner is no longer in Eventor's entry list. The runner was left as is because a card was read or a result exists.",
+  "eventorUseFailed": "Could not use Eventor's value: {{message}}",
+  "eventorGoneCancelledBanner": "This runner is no longer in Eventor's entry list, so the sync marked her as withdrawn.",
+  "invalidClockTime": "Enter a clock time such as 10:30 or 10:30:15."
 }

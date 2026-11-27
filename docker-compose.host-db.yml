@@ -23,6 +23,7 @@ services:
     environment:
       DATABASE_URL: "${DATABASE_URL:-postgresql://oxygen:oxygen@127.0.0.1:5432/oxygen?schema=oxygen}"
       PORT: "3001"
+      TZ: "${TZ:-Europe/Stockholm}"
       HOST: "0.0.0.0"
       NODE_OPTIONS: "--max-old-space-size=4096"
       AUTH_MODE: "${AUTH_MODE:-off}"

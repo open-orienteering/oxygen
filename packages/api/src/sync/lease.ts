@@ -18,11 +18,20 @@
  */
 
 import { TRPCError } from "@trpc/server";
+import { lockEventLeaseAndSync } from "../event-locks.js";
 import { createTRPCClient, httpLink, type TRPCClient } from "@trpc/client";
 import type { AppRouter } from "../routers/index.js";
 import type { EventRef, PrismaClient } from "../db.js";
-import { nodeId, SYNC_SECRET_HEADER } from "./nodeIdentity.js";
+import { Prisma } from "../generated/prisma/client.js";
+import { nodeId, nodeRole, SYNC_NODE_ID_HEADER, SYNC_SECRET_HEADER } from "./nodeIdentity.js";
+import { isCheckingIn } from "./leaseState.js";
 import { makeSyncHeaders } from "./googleIdToken.js";
+import {
+  PEER_CALL_TIMEOUT_MS,
+  PEER_TRANSFER_TIMEOUT_MS,
+  peerSignal,
+  type PeerTimeoutOptions,
+} from "./peerTimeouts.js";
 import {
   applyTokens,
   exportSnapshotMaps,
@@ -40,7 +49,7 @@ import {
   type SnapshotGraphic,
   type SnapshotGraphicBlobs,
 } from "./snapshotGraphics.js";
-import { withoutDroppedFields } from "./dropped-columns.js";
+import { knownFields } from "./knownFields.js";
 import type { MapRows } from "./mapRefresh.js";
 
 // ─── Active lease + write guard ─────────────────────────────
@@ -53,7 +62,7 @@ export interface ActiveLease {
 }
 
 export async function getActiveLease(
-  db: PrismaClient,
+  db: PrismaClient | Prisma.TransactionClient,
   eventId: bigint,
 ): Promise<ActiveLease | null> {
   const row = await db.eventLease.findFirst({
@@ -63,54 +72,179 @@ export async function getActiveLease(
   return row;
 }
 
-/** Whether this node may originate race-critical writes for the event (no lease, or it holds it). */
-export async function isRaceWritable(db: PrismaClient, eventId: bigint): Promise<boolean> {
+export type WriteRefusal = "held-elsewhere" | "checked-in" | "checking-in";
+export type WriteVerdict = { ok: true } | { ok: false; reason: WriteRefusal; holder?: string };
+
+/**
+ * The single guard: may THIS node originate race or course data for the
+ * event? Every writer outside a request that already went through
+ * `raceProcedure` (background jobs that emit course data, a push from a
+ * station) asks here rather than re-deriving the rule.
+ *
+ * - Another node holds the active lease: no (`held-elsewhere`).
+ * - A checkin barrier of this process is running: no (`checking-in`).
+ * - On a venue box, the event has lease history but this box does not hold
+ *   the active lease: no (`checked-in`). The box handed the event back (or
+ *   lost it to a takeover); its copy is no longer the writer. A box-local
+ *   event with no lease rows stays writable, as does any event on the cloud
+ *   without a lease ("no lease: the node you talk to is the writer").
+ */
+export async function mayWriteEventData(
+  db: PrismaClient | Prisma.TransactionClient,
+  eventId: bigint,
+): Promise<WriteVerdict> {
+  if (isCheckingIn(eventId)) return { ok: false, reason: "checking-in" };
   const lease = await getActiveLease(db, eventId);
-  return !lease || lease.holderNodeId === nodeId();
+  if (lease) {
+    return lease.holderNodeId === nodeId()
+      ? { ok: true }
+      : { ok: false, reason: "held-elsewhere", holder: lease.holderNodeId };
+  }
+  if (nodeRole() === "venue" && (await db.eventLease.count({ where: { eventId } })) > 0) {
+    return { ok: false, reason: "checked-in" };
+  }
+  return { ok: true };
 }
 
 /**
- * Throw the typed "checked out" error when this node is not the holder of
- * an active lease. The backbone of `raceProcedure` — see trpc.ts.
+ * Whether `peerNodeId` is a node whose lease on the event ended in a forced
+ * takeover and which no longer holds it: what it still delivers is a late
+ * backlog the cloud applies but names in its log.
+ */
+export async function isStaleHolder(
+  db: PrismaClient | Prisma.TransactionClient,
+  eventId: bigint,
+  peerNodeId: string | null | undefined,
+): Promise<boolean> {
+  if (!peerNodeId) return false;
+  const active = await getActiveLease(db, eventId);
+  if (active?.holderNodeId === peerNodeId) return false;
+  const last = await db.eventLease.findFirst({
+    where: { eventId, holderNodeId: peerNodeId },
+    orderBy: { id: "desc" },
+    select: { releasedAt: true, forced: true },
+  });
+  return last?.releasedAt != null && last.forced;
+}
+
+/** Whether this node may originate race-critical writes (see `mayWriteEventData`). */
+export async function isRaceWritable(db: PrismaClient | Prisma.TransactionClient, eventId: bigint): Promise<boolean> {
+  return (await mayWriteEventData(db, eventId)).ok;
+}
+
+/** The typed refusal for a verdict that is not ok. */
+export function writeRefusalError(v: Extract<WriteVerdict, { ok: false }>): TRPCError {
+  const message =
+    v.reason === "checking-in"
+      ? "Event is being checked in — race-critical writes resume on the cloud once the checkin finishes."
+      : v.reason === "checked-in"
+        ? "This copy was checked in or taken over; race writes go to the cloud."
+        : `Event is checked out to node "${v.holder}" — race-critical writes must go to that node.`;
+  return new TRPCError({ code: "PRECONDITION_FAILED", message });
+}
+
+/**
+ * Throw the typed "checked out" error when this node may not write the
+ * event's race data. The backbone of `raceProcedure` — see trpc.ts.
  */
 export async function assertRaceWritable(
   db: PrismaClient,
   eventId: bigint,
 ): Promise<void> {
-  const lease = await getActiveLease(db, eventId);
-  if (lease && lease.holderNodeId !== nodeId()) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message: `Event is checked out to node "${lease.holderNodeId}" — race-critical writes must go to that node.`,
-    });
-  }
+  const v = await mayWriteEventData(db, eventId);
+  if (!v.ok) throw writeRefusalError(v);
 }
 
 // ─── Acquire / release ──────────────────────────────────────
 
 export async function acquireLease(
+  db: PrismaClient | Prisma.TransactionClient,
+  eventId: bigint,
+  holderNodeIdRaw: string,
+): Promise<ActiveLease> {
+  // The node-id header is trimmed on the way in (trpc.ts): store the same
+  // form so whitespace can never cause a holder mismatch.
+  const holderNodeId = holderNodeIdRaw.trim();
+  const take = async (tx: Prisma.TransactionClient): Promise<ActiveLease> => {
+    // Serialised against the Eventor sync (its transaction holds the same
+    // lock and re-checks the lease), and against a second checkout.
+    await lockEventLeaseAndSync(tx, eventId);
+    // A test event holds synthetic data and is never taken to a venue (API-06).
+    const flag = await tx.event.findUnique({ where: { id: eventId }, select: { isTestEvent: true } });
+    if (flag?.isTestEvent) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "A test event cannot be checked out to a venue.",
+      });
+    }
+    const current = await getActiveLease(tx, eventId);
+    if (current) {
+      // The same holder asking again (a retried checkout whose first attempt
+      // died after the peer took the lease) is not a conflict.
+      if (current.holderNodeId === holderNodeId) return current;
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: `Event is already checked out to "${current.holderNodeId}".`,
+      });
+    }
+    try {
+      return await tx.eventLease.create({
+        data: { eventId, holderNodeId },
+        select: { id: true, holderNodeId: true, acquiredAt: true, forced: true },
+      });
+    } catch (err) {
+      // The partial unique index (one active lease per event) stays the last
+      // line of defence for a writer that did not take the lock.
+      if ((err as { code?: string }).code === "P2002") {
+        throw new TRPCError({ code: "CONFLICT", message: "Event is already checked out." });
+      }
+      throw err;
+    }
+  };
+  // A sync may hold the lock for up to its own 60 s: wait for it, do not error.
+  return "$transaction" in db ? db.$transaction(take, { timeout: 90_000, maxWait: 10_000 }) : take(db);
+}
+
+/**
+ * The cloud side of a checkout: take the lease, then mark every entry already
+ * in the journal as delivered. Their effects are in the snapshot the box is
+ * about to read, so the box must not pull them. Marking runs before the
+ * snapshot is read; an entry committed after it stays unmarked and reaches
+ * the box through its first pull even when the snapshot already holds its
+ * effect (applying it twice is a no-op, review MC-22).
+ */
+export async function acquireLeaseForPeer(
   db: PrismaClient,
   eventId: bigint,
   holderNodeId: string,
 ): Promise<ActiveLease> {
-  try {
-    const row = await db.eventLease.create({
-      data: { eventId, holderNodeId },
-      select: { id: true, holderNodeId: true, acquiredAt: true, forced: true },
+  const lease = await acquireLease(db, eventId, holderNodeId);
+  await db.journalEntry.updateMany({
+    where: { eventId, pushedAt: null },
+    data: { pushedAt: new Date() },
+  });
+  return lease;
+}
+
+/**
+ * The cloud side of a checkin. Idempotent for the caller: when the lease was
+ * already released by this holder (the first reply was lost), answer ok.
+ */
+export async function releaseLeaseForPeer(
+  db: PrismaClient,
+  eventId: bigint,
+  holderNodeId: string,
+): Promise<void> {
+  const active = await getActiveLease(db, eventId);
+  if (!active) {
+    const latest = await db.eventLease.findFirst({
+      where: { eventId },
+      orderBy: { id: "desc" },
+      select: { holderNodeId: true },
     });
-    return row;
-  } catch (err) {
-    // The partial unique index (one active lease per event) turns a
-    // double-checkout race into a constraint violation.
-    if ((err as { code?: string }).code === "P2002") {
-      const current = await getActiveLease(db, eventId);
-      throw new TRPCError({
-        code: "CONFLICT",
-        message: `Event is already checked out to "${current?.holderNodeId ?? "unknown"}".`,
-      });
-    }
-    throw err;
+    if (latest?.holderNodeId === holderNodeId) return;
   }
+  await releaseLease(db, eventId, { expectedHolder: holderNodeId });
 }
 
 export async function releaseLease(
@@ -186,6 +320,8 @@ export type TokenTable = (typeof TOKEN_TABLES)[number];
 export const NULLABLE_JSON_SHEET_FIELDS = ["windowCenter"] as const;
 /** `course_objects` columns typed `Json?` (J10's `attach`). */
 export const NULLABLE_JSON_OBJECT_FIELDS = ["attach"] as const;
+/** `runners` / `classes` column typed `Json?` (the Eventor sync snapshot). */
+const NULLABLE_JSON_EVENTOR_FIELDS = ["eventorSnapshot"] as const;
 
 /**
  * Rows of a snapshot table as the importer inserts them: exact tokens, a
@@ -197,12 +333,20 @@ function importRows(
   rows: Record<string, unknown>[],
   snapshot: EventSnapshot,
 ): Record<string, unknown>[] {
-  if (t === "course") return rows.map((r) => withoutDroppedFields("course", r));
+  // Columns the peer has and this schema lacks (a newer cloud) are ignored.
+  rows = rows.map((r) => knownFields(t, r));
   const templateIds = new Set((snapshot.tables.mapTemplate ?? []).map((r) => String(r.id)));
   const knownTemplate = (v: unknown) => (typeof v === "string" && templateIds.has(v) ? v : null);
   if (t === "class") {
-    return rows.map((r) => ("sheetTemplateId" in r ? { ...r, sheetTemplateId: knownTemplate(r.sheetTemplateId) } : r));
+    // `eventor_snapshot` (docs/system/eventor-sync.md) is a nullable JSON column.
+    return rows.map((r) =>
+      withDbNulls(
+        "sheetTemplateId" in r ? { ...r, sheetTemplateId: knownTemplate(r.sheetTemplateId) } : r,
+        NULLABLE_JSON_EVENTOR_FIELDS,
+      ),
+    );
   }
+  if (t === "runner") return rows.map((r) => withDbNulls(r, NULLABLE_JSON_EVENTOR_FIELDS));
   if ((TOKEN_TABLES as readonly string[]).includes(t)) {
     const exact = applyTokens(rows, snapshot.versions?.[t as TokenTable]);
     if (t === "courseObject") return exact.map((r) => withDbNulls(r, NULLABLE_JSON_OBJECT_FIELDS));
@@ -213,14 +357,33 @@ function importRows(
 }
 
 /** Delegate lookup that keeps Prisma's per-model types out of the loop. */
-function delegate(db: PrismaClient, table: SnapshotTable) {
+function delegate(db: PrismaClient | Prisma.TransactionClient, table: SnapshotTable) {
   return db[table] as unknown as {
     findMany(args: { where: { eventId: bigint } }): Promise<Record<string, unknown>[]>;
     createMany(args: { data: Record<string, unknown>[] }): Promise<unknown>;
   };
 }
 
+/**
+ * The newest applied migration of this node's database: what a peer compares
+ * to see that the two run different versions (review SYNC-17). Null when it
+ * cannot be read (a database without the Prisma bookkeeping table).
+ */
+export async function schemaName(db: PrismaClient | Prisma.TransactionClient): Promise<string | null> {
+  try {
+    const rows = await db.$queryRaw<Array<{ migration_name: string }>>`
+      SELECT migration_name FROM oxygen._prisma_migrations
+      WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL
+      ORDER BY migration_name DESC LIMIT 1`;
+    return rows[0]?.migration_name ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export interface EventSnapshot {
+  /** The exporter's newest migration (`schemaName`). Absent from an exporter that predates it. */
+  schema?: string | null;
   event: Record<string, unknown>;
   tables: Record<SnapshotTable, Record<string, unknown>[]>;
   seqs: Array<{ tableName: string; nextSeq: number }>;
@@ -250,49 +413,71 @@ export async function exportEventSnapshot(
   db: PrismaClient,
   event: EventRef,
 ): Promise<EventSnapshot> {
-  const eventRow = await db.event.findUniqueOrThrow({
-    where: { id: event.id },
-  });
+  // One snapshot of the database for every read: tables, counters, journal
+  // head and the map and graphic parts all describe the same moment, so a
+  // write committing mid-export can show up in one part and not another
+  // (review MC-22). REPEATABLE READ does not block writers.
+  return db.$transaction(
+    async (tx) => {
+      const eventRow = await tx.event.findUniqueOrThrow({
+        where: { id: event.id },
+      });
 
-  const tables = {} as EventSnapshot["tables"];
-  for (const t of SNAPSHOT_TABLES) {
-    if (t === "courseControl") {
-      tables[t] = await db.courseControl.findMany({
-        where: { course: { eventId: event.id } },
-      }) as unknown as Record<string, unknown>[];
-      continue;
-    }
-    if (t === "classCoursePool") {
-      tables[t] = await db.classCoursePool.findMany({
-        where: { class: { eventId: event.id } },
-      }) as unknown as Record<string, unknown>[];
-      continue;
-    }
-    tables[t] = await delegate(db, t).findMany({ where: { eventId: event.id } });
-  }
+      const tables = {} as EventSnapshot["tables"];
+      for (const t of SNAPSHOT_TABLES) {
+        if (t === "courseControl") {
+          tables[t] = await tx.courseControl.findMany({
+            where: { course: { eventId: event.id } },
+          }) as unknown as Record<string, unknown>[];
+          continue;
+        }
+        if (t === "classCoursePool") {
+          tables[t] = await tx.classCoursePool.findMany({
+            where: { class: { eventId: event.id } },
+          }) as unknown as Record<string, unknown>[];
+          continue;
+        }
+        tables[t] = await delegate(tx, t).findMany({ where: { eventId: event.id } });
+      }
 
-  const seqs = await db.eventSeq.findMany({
-    where: { eventId: event.id },
-    select: { tableName: true, nextSeq: true },
-  });
+      const seqs = await tx.eventSeq.findMany({
+        where: { eventId: event.id },
+        select: { tableName: true, nextSeq: true },
+      });
 
-  const head = await db.journalEntry.findFirst({
-    where: { eventId: event.id },
-    orderBy: [{ hlc: "desc" }, { id: "desc" }],
-    select: { hlc: true, id: true },
-  });
+      const head = await tx.journalEntry.findFirst({
+        where: { eventId: event.id },
+        orderBy: [{ hlc: "desc" }, { id: "desc" }],
+        select: { hlc: true, id: true },
+      });
 
-  return {
-    event: eventRow as unknown as Record<string, unknown>,
-    tables,
-    seqs,
-    journalCursor: head
-      ? { hlc: head.hlc.toString(), id: head.id }
-      : { hlc: "0", id: "" },
-    maps: await exportSnapshotMaps(db, event.id),
-    versions: Object.fromEntries(TOKEN_TABLES.map((t) => [t, tokenMapOf(tables[t])])),
-    graphics: await exportSnapshotGraphics(db, event.id),
-  };
+      return {
+        schema: await schemaName(tx),
+        event: eventRow as unknown as Record<string, unknown>,
+        tables,
+        seqs,
+        // Kept for a box that still pulls by HLC cursor.
+        journalCursor: head
+          ? { hlc: head.hlc.toString(), id: head.id }
+          : { hlc: "0", id: "" },
+        maps: await exportSnapshotMaps(tx, event.id),
+        versions: Object.fromEntries(TOKEN_TABLES.map((t) => [t, tokenMapOf(tables[t])])),
+        graphics: await exportSnapshotGraphics(tx, event.id),
+      };
+    },
+    { isolationLevel: "RepeatableRead", timeout: 60_000 },
+  );
+}
+
+export interface ImportOptions {
+  /**
+   * Runs inside the import transaction once the event is in place: whatever
+   * must commit with it or not at all (the checkout's sync-state row and
+   * local lease), so a crash leaves either the whole checkout or none of it.
+   */
+  afterImport?: (tx: Prisma.TransactionClient, eventId: bigint) => Promise<void>;
+  /** Replace graphics owned by another event on this box (`GRAPHIC_ID_CLASH` otherwise). */
+  replaceOtherEvents?: boolean;
 }
 
 /**
@@ -311,18 +496,35 @@ export async function importEventSnapshot(
   snapshot: EventSnapshot,
   blobs?: SnapshotBlobs,
   graphicBlobs?: SnapshotGraphicBlobs,
+  opts: ImportOptions = {},
 ): Promise<EventRef> {
-  // A v0.6.0 exporter still sends the columns E5 dropped.
-  const { id: _dropId, ...eventData } = withoutDroppedFields("event", snapshot.event);
+  // A peer of another version may send columns this schema lacks (the
+  // v0.6.0 exporter's E5 columns, a newer cloud's additions).
+  const { id: _dropId, ...eventData } = knownFields("event", snapshot.event);
   const nameId = String(eventData.nameId);
 
   const localId = await db.$transaction(
     async (tx) => {
+      // Readout-backup staging rows are server-local and not in the snapshot,
+      // but they are the only copy of what a station's flash held: carry
+      // them over a re-checkout.
+      const backups = await tx.cardReadoutBackup.findMany({
+        where: { event: { nameId } },
+      });
       await tx.event.deleteMany({ where: { nameId } });
       const created = await tx.event.create({
         data: eventData as never,
         select: { id: true },
       });
+      if (backups.length > 0) {
+        await tx.cardReadoutBackup.createMany({
+          data: backups.map((b) => ({
+            ...b,
+            eventId: created.id,
+            ownerData: b.ownerData === null ? Prisma.DbNull : b.ownerData,
+          })) as Prisma.CardReadoutBackupCreateManyInput[],
+        });
+      }
 
       for (const t of SNAPSHOT_TABLES) {
         const rows = snapshot.tables[t] ?? [];
@@ -332,7 +534,7 @@ export async function importEventSnapshot(
           // travel verbatim.
           await (tx[t] as unknown as {
             createMany(a: { data: Record<string, unknown>[] }): Promise<unknown>;
-          }).createMany({ data: rows });
+          }).createMany({ data: rows.map((r) => knownFields(t, r)) });
           continue;
         }
         await (tx[t] as unknown as {
@@ -344,7 +546,9 @@ export async function importEventSnapshot(
 
       // Graphics by the cloud's id: the layout rows reference them by number.
       if (snapshot.graphics && graphicBlobs) {
-        await importSnapshotGraphics(tx, created.id, snapshot.graphics, graphicBlobs);
+        await importSnapshotGraphics(tx, created.id, snapshot.graphics, graphicBlobs, {
+          replaceOtherEvents: opts.replaceOtherEvents,
+        });
       }
 
       // Content-addressed blobs (append-only) and the event's map pins.
@@ -354,12 +558,18 @@ export async function importEventSnapshot(
 
       // Seq counters travel with the lease — the holder is the only
       // allocator, so the importing node continues exactly where the
-      // exporter stopped.
-      if (snapshot.seqs.length > 0) {
-        await tx.eventSeq.createMany({
-          data: snapshot.seqs.map((s) => ({ ...s, eventId: created.id })),
-        });
+      // exporter stopped. `allocate_event_seq()` already advanced the
+      // counters past the explicit seq values just inserted; the exporter's
+      // counter wins only when it is higher (it may have burnt values).
+      for (const s of snapshot.seqs) {
+        await tx.$executeRaw`
+          INSERT INTO oxygen.event_seqs (event_id, table_name, next_seq)
+          VALUES (${created.id}, ${s.tableName}, ${s.nextSeq})
+          ON CONFLICT (event_id, table_name)
+          DO UPDATE SET next_seq = GREATEST(oxygen.event_seqs.next_seq, EXCLUDED.next_seq)`;
       }
+
+      await opts.afterImport?.(tx, created.id);
 
       return created.id;
     },
@@ -378,32 +588,22 @@ export async function importEventSnapshot(
 export interface ShippingStatus {
   /** Local journal entries not yet acked by the peer. */
   pendingPush: number;
-  /** When the watermark row last moved (≈ last successful ship). */
+  /** When an entry was last delivered to (or received from) the peer. */
   lastShipAt: string | null;
 }
 
 export async function shippingStatus(
   db: PrismaClient,
   eventId: bigint,
-  peerId: string,
+  _peerId: string,
 ): Promise<ShippingStatus> {
-  const state = await db.journalSyncState.findUnique({
-    where: { peerId_eventId: { peerId, eventId } },
-  });
-  const pushedHlc = state?.pushedHlc ?? 0n;
-  const pushedId = state?.pushedId ?? "";
-  const pendingPush = await db.journalEntry.count({
-    where: {
-      eventId,
-      OR: [
-        { hlc: { gt: pushedHlc } },
-        ...(pushedId ? [{ hlc: pushedHlc, id: { gt: pushedId } }] : []),
-      ],
-    },
-  });
+  const [pendingPush, last] = await Promise.all([
+    db.journalEntry.count({ where: { eventId, pushedAt: null } }),
+    db.journalEntry.aggregate({ where: { eventId }, _max: { pushedAt: true } }),
+  ]);
   return {
     pendingPush,
-    lastShipAt: state?.updatedAt.toISOString() ?? null,
+    lastShipAt: last._max.pushedAt?.toISOString() ?? null,
   };
 }
 
@@ -414,15 +614,31 @@ export interface LeasePeer {
   acquire(nameId: string, holderNodeId: string): Promise<void>;
   release(nameId: string, holderNodeId: string): Promise<void>;
   exportSnapshot(nameId: string): Promise<EventSnapshot>;
+  /**
+   * Who holds the peer's active lease for the event (null: none). Optional:
+   * a peer that predates it answers NOT_FOUND, which callers treat as "unknown".
+   */
+  holder?(nameId: string): Promise<{ holderNodeId: string | null; schema?: string | null }>;
   /** The peer's full event row — the settings-refresh source. */
   exportSettings(nameId: string): Promise<Record<string, unknown>>;
+  /**
+   * Write the holder's venue-owned event columns on the peer (review MC-08).
+   * A peer that predates it answers NOT_FOUND.
+   */
+  importSettings(nameId: string, settings: Record<string, unknown>): Promise<void>;
   /** One slice of a map blob the event pins (docs/map-storage.md §7.2). */
   exportBlob(nameId: string, input: ExportBlobInput): Promise<ExportBlobResult>;
   /** The event's cloud-owned map rows without bytes — the map-refresh source (row G19). */
   exportMapRows(nameId: string): Promise<MapRows>;
 }
 
-export function httpLeasePeer(baseUrl: string, secret: string): LeasePeer {
+export function httpLeasePeer(
+  baseUrl: string,
+  secret: string,
+  timeouts: PeerTimeoutOptions = {},
+): LeasePeer {
+  const callMs = timeouts.callTimeoutMs ?? PEER_CALL_TIMEOUT_MS;
+  const transferMs = timeouts.transferTimeoutMs ?? PEER_TRANSFER_TIMEOUT_MS;
   const clients = new Map<string, TRPCClient<AppRouter>>();
   const clientFor = (nameId: string): TRPCClient<AppRouter> => {
     let c = clients.get(nameId);
@@ -436,6 +652,7 @@ export function httpLeasePeer(baseUrl: string, secret: string): LeasePeer {
             headers: makeSyncHeaders({
               "x-event-id": nameId,
               [SYNC_SECRET_HEADER]: secret,
+              [SYNC_NODE_ID_HEADER]: nodeId(),
             }),
           }),
         ],
@@ -446,25 +663,31 @@ export function httpLeasePeer(baseUrl: string, secret: string): LeasePeer {
   };
   return {
     async acquire(nameId, holderNodeId) {
-      await clientFor(nameId).lease.acquire.mutate({ holderNodeId });
+      await clientFor(nameId).lease.acquire.mutate({ holderNodeId }, peerSignal(callMs));
     },
     async release(nameId, holderNodeId) {
-      await clientFor(nameId).lease.release.mutate({ holderNodeId });
+      await clientFor(nameId).lease.release.mutate({ holderNodeId }, peerSignal(callMs));
     },
     async exportSnapshot(nameId) {
-      return (await clientFor(nameId).lease.exportSnapshot.query()) as EventSnapshot;
+      return (await clientFor(nameId).lease.exportSnapshot.query(undefined, peerSignal(transferMs))) as EventSnapshot;
     },
     async exportSettings(nameId) {
-      return (await clientFor(nameId).lease.exportSettings.query()) as Record<
+      return (await clientFor(nameId).lease.exportSettings.query(undefined, peerSignal(callMs))) as Record<
         string,
         unknown
       >;
     },
+    async importSettings(nameId, settings) {
+      await clientFor(nameId).lease.importSettings.mutate({ settings }, peerSignal(callMs));
+    },
+    async holder(nameId) {
+      return clientFor(nameId).lease.holder.query(undefined, peerSignal(callMs));
+    },
     async exportBlob(nameId, input) {
-      return clientFor(nameId).lease.exportBlob.query(input);
+      return clientFor(nameId).lease.exportBlob.query(input, peerSignal(transferMs));
     },
     async exportMapRows(nameId) {
-      return (await clientFor(nameId).lease.exportMapRows.query()) as MapRows;
+      return (await clientFor(nameId).lease.exportMapRows.query(undefined, peerSignal(transferMs))) as MapRows;
     },
   };
 }

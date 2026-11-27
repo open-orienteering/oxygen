@@ -38,6 +38,7 @@ export const WEIGHTS = {
   "course-editor-phone.spec.ts": { mobile: 31 }, // the editor's phone subset (touch, F3/F7 on a phone)
   "editor-url.spec.ts": 30, // F31: five flows, two reloads each; not yet measured in CI
   "courses.spec.ts": 23,
+  "course-import-safety.spec.ts": 12, // package 17: dialog modes, consequence list, refusals
   "controls.spec.ts": 22,
   "course-maps.spec.ts": 19,
   "kiosk-smart.spec.ts": 19,
@@ -85,6 +86,7 @@ export const WEIGHTS = {
   "registration-trends.spec.ts": 3,
   "runners-bulk.spec.ts": 3,
   "session-recovery.spec.ts": 3,
+  "station-outage.spec.ts": 12,
   "trpc-batch-matching.spec.ts": 3,
 };
 

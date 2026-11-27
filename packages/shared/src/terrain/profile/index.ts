@@ -9,3 +9,4 @@ export * from "./sampler.js";
 export * from "./climb.js";
 export * from "./profile.js";
 export * from "./pick.js";
+export * from "./interval.js";

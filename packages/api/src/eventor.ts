@@ -1,6 +1,6 @@
 import { XMLParser, XMLBuilder } from "fast-xml-parser";
 import AdmZip from "adm-zip";
-import { type EventorEnvironment } from "@oxygen/shared";
+import { type EventorEnvironment, runningTimeDs } from "@oxygen/shared";
 
 const EVENTOR_URLS: Record<EventorEnvironment, string> = {
   prod: "https://eventor.orientering.se/api/",
@@ -72,7 +72,12 @@ export interface EventorEventClass {
   highAge: number;   // 0 = no upper age limit
   sequence: number;  // Eventor sort order
   classType: string; // e.g. "Åldersklasser", "Öppna klasser"
-  noTiming: boolean; // resultListMode == "UnorderedNoTimes"
+  /**
+   * resultListMode == "UnorderedNoTimes". `undefined` = Eventor gave no
+   * answer (the export/classes enrichment failed or came back empty): "no
+   * opinion", never "not no-timing" (review EVT-03).
+   */
+  noTiming?: boolean;
   /** Published class-course length from Eventor's IOF 3.0 start list. */
   courseLengthM?: number;
 }
@@ -133,7 +138,6 @@ export interface EventorResult {
   startTime: number;    // deciseconds from midnight
   finishTime: number;   // deciseconds from midnight
   status: number;       // MeOS status code
-  startNo: number;      // result position (used as startNo/bib equivalent)
   bib: string;          // BibNumber string from result, e.g. "123" or "H4"
 }
 
@@ -155,6 +159,8 @@ export interface ResultForUpload {
    */
   runningTimeAdjustment?: number;
   status: number; // MeOS status
+  /** Start time passed or punches read: an Unknown runner is "Active", not "Inactive". */
+  started?: boolean;
   place?: number; // 1-based, 0 or undefined = no placement
   noTiming?: boolean; // class has no timing/ranking
   // Fee data (integer currency units, e.g. 15000 = 150.00 SEK when factor=100)
@@ -251,7 +257,7 @@ export class EventorAuthError extends Error {
   }
 }
 
-async function eventorFetch(
+export async function eventorFetch(
   endpoint: string,
   apiKey: string,
   env: EventorEnvironment = "prod",
@@ -264,18 +270,83 @@ async function eventorFetch(
     }
   }
 
-  const resp = await fetch(url.toString(), {
-    headers: { ApiKey: apiKey },
+  return withEventorTimeout(EVENTOR_REQUEST_TIMEOUT_MS, "request", async (signal) => {
+    const resp = await fetch(url.toString(), {
+      headers: { ApiKey: apiKey },
+      signal,
+    });
+
+    if (resp.status === 403) {
+      throw new EventorAuthError();
+    }
+    if (!resp.ok) {
+      throw new Error(`Eventor API error: ${resp.status} ${resp.statusText}`);
+    }
+
+    return resp.text();
   });
+}
 
-  if (resp.status === 403) {
-    throw new EventorAuthError();
-  }
-  if (!resp.ok) {
-    throw new Error(`Eventor API error: ${resp.status} ${resp.statusText}`);
-  }
+// ─── Timeouts (EVT-13) ──────────────────────────────────────
 
-  return resp.text();
+export const EVENTOR_REQUEST_TIMEOUT_MS = 60_000;
+export const EVENTOR_DOWNLOAD_TIMEOUT_MS = 120_000;
+/**
+ * The upload deadline. `EVENTOR_UPLOAD_TIMEOUT_MS` in the environment
+ * overrides it (read once at load), for the E2E stack that stalls the stub.
+ */
+export const EVENTOR_UPLOAD_TIMEOUT_MS = (() => {
+  const n = Number(process.env.EVENTOR_UPLOAD_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 60_000;
+})();
+
+/**
+ * Eventor did not answer in time. `phase "request"`: a read ran out of time (a
+ * multi-call sync may have partly applied). `phase "upload"`: a POST whose outcome is unknown, the
+ * XML may have been received.
+ */
+export class EventorTimeoutError extends Error {
+  constructor(
+    readonly phase: "request" | "upload",
+    ms: number,
+  ) {
+    const secs = Math.round(ms / 1000);
+    super(
+      phase === "upload"
+        ? `EVENTOR_OUTCOME_UNKNOWN: Eventor did not confirm the upload within ${secs} s. It may or may not have been received; check the event in Eventor before pushing again.`
+        : `EVENTOR_TIMEOUT: Eventor did not answer within ${secs} s. Try again.`,
+    );
+    this.name = "EventorTimeoutError";
+  }
+}
+
+/**
+ * Run `fn` with an abort signal that fires after `ms`. `fn` must read the
+ * response body itself so the deadline covers it. A timer (not
+ * `AbortSignal.timeout`) so fake timers can drive it in tests.
+ */
+export async function withEventorTimeout<T>(
+  ms: number,
+  phase: "request" | "upload",
+  fn: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const ctrl = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    ctrl.abort();
+  }, ms);
+  try {
+    return await fn(ctrl.signal);
+  } catch (err) {
+    const name = (err as { name?: string } | null)?.name;
+    if (timedOut || name === "TimeoutError" || name === "AbortError") {
+      throw new EventorTimeoutError(phase, ms);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function safeInt(val: unknown): number {
@@ -396,8 +467,15 @@ function formatIofTime(date: string, deciseconds: number): string {
   return `${date}T${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-// MeOS RunnerStatus → IOF 3.0 ResultStatus string (for upload)
-function meosStatusToIof(meosStatus: number, hasFinishTime: boolean): string {
+// MeOS RunnerStatus → IOF 3.0 ResultStatus string (for upload).
+// Unknown (0) is a runner without a result yet: IOF 3.0 has Inactive (not
+// started), Active (on the course) and Finished (finished, not checked) for
+// that, never OK or DidNotStart (RES-21).
+export function meosStatusToIof(
+  meosStatus: number,
+  hasFinishTime: boolean,
+  hasStarted = false,
+): string {
   switch (meosStatus) {
     case 1: return "OK";
     case 2: return hasFinishTime ? "OK" : "NotCompeting"; // NoTiming
@@ -405,11 +483,13 @@ function meosStatusToIof(meosStatus: number, hasFinishTime: boolean): string {
     case 4: return "DidNotFinish";
     case 5: return "Disqualified";
     case 6: return "OverTime"; // StatusMAX
-    case 15: return hasFinishTime ? "NotCompeting" : "NotCompeting"; // OutOfCompetition
+    case 15: return "NotCompeting"; // OutOfCompetition
     case 20: return "DidNotStart";
     case 21: return "Cancelled";
     case 99: return "DidNotEnter"; // StatusNotCompetiting
-    default: return hasFinishTime ? "OK" : "DidNotStart";
+    default:
+      if (hasFinishTime) return "Finished";
+      return hasStarted ? "Active" : "Inactive";
   }
 }
 
@@ -614,7 +694,7 @@ export async function fetchEventClasses(
         highAge: safeInt(ec["@_highAge"] ?? 0),
         sequence: safeInt(ec["@_sequence"] ?? 0),
         classType: safeStr(classTypeObj?.Name ?? ""),
-        noTiming: false,
+        noTiming: undefined,
       };
     },
   );
@@ -624,12 +704,15 @@ export async function fetchEventClasses(
   await Promise.all([
     fetchNoTimingClassNames(apiKey, eventId, env)
       .then((noTimingNames) => {
-        for (const cls of classes) {
-          if (noTimingNames.has(cls.name)) cls.noTiming = true;
-        }
+        for (const cls of classes) cls.noTiming = noTimingNames.has(cls.name);
       })
-      .catch(() => {
-        // export/classes unavailable — noTiming stays false
+      .catch((err) => {
+        // export/classes unavailable: noTiming stays undefined ("no opinion"),
+        // so a sync never clears a stored flag on a failed request (EVT-03).
+        console.warn(
+          `[eventor] export/classes unavailable for event ${eventId}; class no-timing flags left as they are:`,
+          err instanceof Error ? err.message : err,
+        );
       }),
     fetchStartListCourseLengths(apiKey, eventId, env)
       .then((lengths) => {
@@ -713,7 +796,11 @@ async function fetchNoTimingClassNames(
 
   const parsed = parser.parse(xml);
   const classList = parsed.ClassList;
-  if (!classList || !classList.Class) return new Set();
+  // An absent list is an odd 200, not "no class is no-timing": the caller
+  // treats the throw as "unknown" (EVT-03).
+  if (!classList || !classList.Class) {
+    throw new Error("export/classes returned no ClassList");
+  }
 
   const classes = Array.isArray(classList.Class)
     ? classList.Class
@@ -1016,8 +1103,8 @@ export async function fetchResults(
       const statusStr = safeStr(statusObj["@_value"] ?? "");
       const status = EVENTOR_STATUS_MAP[statusStr] ?? 0;
 
-      // Position and bib
-      const resultPosition = safeInt(result.ResultPosition ?? 0);
+      // The bib only: `<ResultPosition>` is the finishing place, not a start
+      // number (review EVT-04), so it is not read at all.
       const bib = safeStr(result.BibNumber ?? "");
 
       results.push({
@@ -1035,7 +1122,6 @@ export async function fetchResults(
         startTime,
         finishTime,
         status,
-        startNo: resultPosition,
         bib,
       });
     }
@@ -1143,18 +1229,23 @@ export async function fetchCachedCompetitors(
   url.searchParams.set("zip", "true");
   url.searchParams.set("version", "3.0");
 
-  const res = await fetch(url.toString(), {
-    headers: { ApiKey: apiKey },
-  });
-
-  if (!res.ok) {
-    throw new Error(
-      `Eventor cachedcompetitors failed: ${res.status} ${res.statusText}`,
-    );
-  }
-
-  // Response is a ZIP file
-  const zipBuffer = Buffer.from(await res.arrayBuffer());
+  const zipBuffer = await withEventorTimeout(
+    EVENTOR_DOWNLOAD_TIMEOUT_MS,
+    "request",
+    async (signal) => {
+      const res = await fetch(url.toString(), {
+        headers: { ApiKey: apiKey },
+        signal,
+      });
+      if (!res.ok) {
+        throw new Error(
+          `Eventor cachedcompetitors failed: ${res.status} ${res.statusText}`,
+        );
+      }
+      // Response is a ZIP file
+      return Buffer.from(await res.arrayBuffer());
+    },
+  );
   const zip = new AdmZip(zipBuffer);
   const entries = zip.getEntries();
   if (entries.length === 0) {
@@ -1375,18 +1466,21 @@ async function postZip(
   env: EventorEnvironment,
 ): Promise<void> {
   const url = new URL(endpoint, eventorBaseUrl(env));
-  const resp = await fetch(url.toString(), {
-    method: "POST",
-    headers: { ApiKey: apiKey },
-    body: new Uint8Array(zip.toBuffer()),
-  });
+  await withEventorTimeout(EVENTOR_UPLOAD_TIMEOUT_MS, "upload", async (signal) => {
+    const resp = await fetch(url.toString(), {
+      method: "POST",
+      headers: { ApiKey: apiKey },
+      body: new Uint8Array(zip.toBuffer()),
+      signal,
+    });
 
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(
-      `Eventor upload to ${endpoint} failed: ${resp.status} ${text}`,
-    );
-  }
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(
+        `Eventor upload to ${endpoint} failed: ${resp.status} ${text}`,
+      );
+    }
+  });
 }
 
 /**
@@ -1463,13 +1557,13 @@ export async function uploadResults(
           }
 
           const hasTiming = !r.noTiming;
-          const statusStr = meosStatusToIof(r.status, (r.finishTime ?? 0) > 0);
+          const statusStr = meosStatusToIof(r.status, (r.finishTime ?? 0) > 0, r.started === true);
           // Adjusted running time — mirrors MeOS getRunningTime(true) which
           // returns tComputedTime including NoTiming/BadNoTiming deductions
           // (oImportExport.cpp:2325 calls the adjusted accessor).
           const adjustedRaw =
-            hasTiming && r.status === 1 && r.finishTime && r.startTime && r.finishTime > r.startTime
-              ? Math.max(0, r.finishTime - r.startTime - (r.runningTimeAdjustment ?? 0))
+            hasTiming && r.status === 1 && r.finishTime && r.startTime
+              ? Math.max(0, runningTimeDs(r.startTime, r.finishTime) - (r.runningTimeAdjustment ?? 0))
               : 0;
           const runningTime = adjustedRaw > 0 ? Math.round(adjustedRaw / 10) : undefined;
 

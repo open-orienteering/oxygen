@@ -1,7 +1,9 @@
 // Mount the BigInt JSON polyfill before anything else loads — Prisma
 // models surface BigInt PKs throughout the response pipeline.
 import "./bigint-json.js";
+import { createShutdown, installUnhandledRejectionLogger } from "./process-guards.js";
 
+import { accessSync, constants } from "node:fs";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import {
@@ -12,9 +14,10 @@ import { appRouter, type AppRouter } from "./routers/index.js";
 export type { AppRouter };
 import { createContext } from "./trpc.js";
 import { disconnectAll, prisma } from "./db.js";
+import { seedServerClock } from "./serverClock.js";
 import { backgroundSupervisor } from "./background/supervisor.js";
 import { registerVenueForwarder } from "./sync/venueForwarder.js";
-import { SYNC_SECRET_HEADER } from "./sync/nodeIdentity.js";
+import { SYNC_NODE_ID_HEADER, SYNC_SECRET_HEADER } from "./sync/nodeIdentity.js";
 import { authHeaderName } from "./auth.js";
 import { registerBackupRoute } from "./backup.js";
 import { registerCourseExportRoute } from "./course-export.js";
@@ -29,12 +32,17 @@ import { installDemConfigSource } from "./map-store/dem-settings-store.js";
 import { startDemJobEngine } from "./map-store/dem-jobs.js";
 import { registerCourseMapRoutes } from "./course-maps/routes.js";
 import { registerStaticServe } from "./staticServe.js";
+import { registerReadyRoute } from "./ready.js";
+import { describeSyncAuth } from "./sync/googleIdToken.js";
+import { nodeRole } from "./sync/nodeIdentity.js";
+import { registerSecurityHeaders } from "./securityHeaders.js";
 import "dotenv/config";
 
 const PORT = parseInt(process.env.PORT ?? "3002", 10);
 const HOST = process.env.HOST ?? "0.0.0.0";
 
 async function main() {
+  installUnhandledRejectionLogger();
   const server = Fastify({
     logger: {
       level: "info",
@@ -46,6 +54,8 @@ async function main() {
     bodyLimit: 50 * 1024 * 1024,
     maxParamLength: 500,
   });
+
+  registerSecurityHeaders(server);
 
   // CORS_ORIGINS (comma-separated) extends the dev defaults — a venue box
   // must allow the cloud-served PWA's HTTPS origin so stations on the LAN
@@ -67,6 +77,7 @@ async function main() {
       "x-competition-id",
       "x-event-id",
       SYNC_SECRET_HEADER,
+      SYNC_NODE_ID_HEADER,
       authHeaderName(),
       "x-kiosk-key",
     ],
@@ -99,6 +110,8 @@ async function main() {
   // past it. Null on a local build; the web then shows its own baked value.
   const VERSION = process.env.OXYGEN_VERSION || null;
   server.get("/health", async () => ({ status: "ok", startedAt: SERVER_START }));
+  // Readiness (database + migrations); /health stays the cheap liveness probe.
+  registerReadyRoute(server, { db: () => prisma() });
   server.get("/api/version", async (_req, reply) =>
     reply
       .header("Cache-Control", "no-store")
@@ -119,6 +132,9 @@ async function main() {
   registerMapSourceRoutes(server);
   registerMapUploadRoutes(server);
   startImportJobEngine(prisma());
+  // The node clock restarts at zero: fold in the journal's highest stamp
+  // before the first request can mint one (review SYNC-01).
+  seedServerClock((await prisma().journalEntry.aggregate({ _max: { hlc: true } }))._max.hlc);
   // DEM fetch is opt-in (docs/map-terrain.md §7.0 answer 4, §7.8): Settings →
   // Height data over the MAP_DEM_* environment, re-read before each engine kick.
   installDemConfigSource(process.env);
@@ -168,20 +184,33 @@ async function main() {
 
   await server.listen({ port: PORT, host: HOST });
 
-  const shutdown = async () => {
-    server.log.info("Shutting down");
-    // Hands the lease back so the replacement instance picks the
-    // background jobs up immediately instead of waiting out the TTL.
-    await backgroundSupervisor()
-      .stop()
-      .catch((err) => console.error("[background] shutdown failed:", err));
-    try {
-      await server.close();
-    } finally {
-      await disconnectAll();
-      process.exit(0);
-    }
-  };
+  if (nodeRole() === "venue") {
+    const auth = describeSyncAuth(process.env, (p) => {
+      try {
+        accessSync(p, constants.R_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    server.log[auth.level](auth.message);
+  }
+
+  const shutdown = createShutdown({
+    steps: [
+      {
+        // Hands the lease back so the replacement instance picks the
+        // background jobs up immediately instead of waiting out the TTL.
+        name: "background",
+        run: () => {
+          server.log.info("Shutting down");
+          return backgroundSupervisor().stop();
+        },
+      },
+      { name: "server", run: () => server.close() },
+      { name: "database", run: () => disconnectAll() },
+    ],
+  });
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 }

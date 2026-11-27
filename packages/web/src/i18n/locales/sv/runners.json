@@ -36,6 +36,7 @@
   "female": "Kvinna",
   "nameRequired": "Namn krävs",
   "classRequired": "Klass krävs",
+  "invalidCardNo": "Ange ett giltigt bricknummer",
   "saving": "Sparar...",
   "saved": "Sparat",
   "loading": "Laddar...",
@@ -126,5 +127,16 @@
   "flagOC": "Utom tävlan",
   "flagNT": "Utan tidtagning",
   "flagPayBefore": "Betala före resultat",
-  "variant": "Variant"
+  "variant": "Variant",
+  "eventor": "Eventor",
+  "eventorDiffers": "Skiljer sig från Eventor",
+  "eventorGone": "Borta från Eventor",
+  "eventorBadgeDiffers": "≠ Eventor",
+  "eventorBadgeGone": "Ej i Eventor",
+  "eventorValue": "Eventor: {{value}}",
+  "useEventorValue": "Använd Eventors värde",
+  "eventorGoneBanner": "Löparen finns inte längre i Eventors anmälningslista. Löparen har lämnats som den är eftersom en bricka lästs av eller ett resultat finns.",
+  "eventorUseFailed": "Kunde inte använda Eventors värde: {{message}}",
+  "eventorGoneCancelledBanner": "Löparen finns inte längre i Eventors anmälningslista, så synkningen markerade henne som återbud.",
+  "invalidClockTime": "Ange en klocktid, till exempel 10:30 eller 10:30:15."
 }

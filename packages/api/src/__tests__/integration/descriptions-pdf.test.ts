@@ -11,12 +11,15 @@ import { PDFArray, PDFDict, PDFDocument, PDFName } from "pdf-lib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parseDescriptionsQuery, registerDescriptionsPdfRoute, selectDescriptionBlocks } from "../../course-maps/descriptions-pdf.js";
 import { hasTool, qpdfCheck } from "../../render/pdf-golden.js";
+import { makeCaller } from "../helpers/caller.js";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 
 const hasQpdf = await hasTool("qpdf");
 
 let ctx: TestEventContext;
 let empty: TestEventContext;
+let forked: TestEventContext;
+let fk: { rootSeq: number; abSeq: number; baSeq: number; h21: number; plain: number };
 let server: FastifyInstance;
 let seq: { h21: number; d21: number; open: number; blue: number; red: number };
 
@@ -55,6 +58,40 @@ beforeAll(async () => {
       { eventId, name: "E", classId: h21.id, cardNo: 1005, status: "cancel" },
     ],
   });
+  // A forked course: a butterfly at 31 (variants AB and BA) on H21; 3 runners on AB, 1 on BA, 2 vacancies; a plain H35.
+  forked = await createTestEvent("descriptions_pdf_forked");
+  {
+    const caller = makeCaller(forked.event);
+    const s = (await caller.control.create({ status: 4, xpos: -95, ypos: -10 })).id;
+    const f = (await caller.control.create({ status: 5, xpos: -50, ypos: -10 })).id;
+    const site: number[] = [];
+    for (const [code, x, y] of [[31, -85, 0], [32, -75, 15], [33, -65, 15], [34, -60, 0]] as const) site.push((await caller.control.create({ codes: String(code), xpos: x, ypos: y })).id);
+    const ctl = (siteId: number) => ({ siteId });
+    const { id } = await caller.course.create({ name: "Long", climb: 40 });
+    await caller.course.setStructure({
+      courseId: id,
+      structure: {
+        version: 1,
+        id: "x",
+        orderMode: "ordered",
+        items: [ctl(s), ctl(site[0]), { kind: "variation", id: "b", loop: true, alternatives: [{ label: "A", items: [ctl(site[1])] }, { label: "B", items: [ctl(site[2])] }] }, ctl(site[3]), ctl(f)],
+      },
+    });
+    const variants = await caller.course.variantList({ courseId: id });
+    const seqOf = async (key: string) => variants.find((v) => v.variantKey === key)!.courseId;
+    const idOf = async (key: string) => (await forked.db.course.findFirstOrThrow({ where: { eventId: forked.eventId, seq: variants.find((v) => v.variantKey === key)!.courseId } })).id;
+    const h21f = (await caller.class.create({ name: "H21", courseId: id })).id;
+    await forked.db.class.updateMany({ where: { eventId: forked.eventId, seq: h21f }, data: { vacantCount: 2 } });
+    const cls = await forked.db.class.findFirstOrThrow({ where: { eventId: forked.eventId, seq: h21f } });
+    const ab = await idOf("AB"), ba = await idOf("BA");
+    for (const [i, courseId] of [ab, ab, ab, ba].entries()) await forked.db.runner.create({ data: { eventId: forked.eventId, name: `R${i}`, classId: cls.id, courseId } });
+    // Neither counts: withdrawn.
+    await forked.db.runner.create({ data: { eventId: forked.eventId, name: "W", classId: cls.id, courseId: ba, status: "cancel" } });
+    const plain = (await caller.course.create({ name: "Short" })).id;
+    await caller.course.setStructure({ courseId: plain, structure: { version: 1, id: "y", orderMode: "ordered", items: [ctl(s), ctl(site[0]), ctl(f)] } });
+    const h35 = (await caller.class.create({ name: "H35", courseId: plain })).id;
+    fk = { rootSeq: id, abSeq: await seqOf("AB"), baSeq: await seqOf("BA"), h21: h21f, plain: h35 };
+  }
   seq = { h21: h21.seq, d21: d21.seq, open: open.seq, blue: blue.seq, red: red.seq };
 
   server = Fastify({ logger: false });
@@ -66,6 +103,7 @@ afterAll(async () => {
   await server?.close();
   await ctx?.cleanup();
   await empty?.cleanup();
+  await forked?.cleanup();
   await disconnect();
 });
 
@@ -156,5 +194,33 @@ describe("GET /api/maps/:nameId/descriptions.pdf", () => {
     expect(none.statusCode).toBe(404);
     expect(none.json()).toEqual({ error: "No descriptions" });
     expect((await get("", "oxygen_test_no_such_event")).statusCode).toBe(404);
+  }, 30_000);
+});
+
+describe("a forked course prints one block per variant (CRS-009, course-print.md §6.4)", () => {
+  const ev = () => forked.db.event.findUniqueOrThrow({ where: { id: forked.eventId } });
+  const blocksOf = async (q: Record<string, string>) => selectDescriptionBlocks(forked.db, await ev(), parseDescriptionsQuery(q));
+
+  it("a class on the root: one block per variant, runners by their variant, the vacancies to the fewest (3 + 1 + 2 = 3, 3)", async () => {
+    const blocks = await blocksOf({ classes: String(fk.h21) });
+    expect(blocks.map((b) => [b.label, b.count, b.title])).toEqual([["H21 AB", 3, "Long AB"], ["H21 BA", 3, "Long BA"]]);
+    expect(blocks[0].header).toMatchObject({ classNames: "H21", courseName: "Long AB" });
+    expect(blocks[0].rows.map((r) => r.kind === "control" && r.code)).not.toEqual(blocks[1].rows.map((r) => r.kind === "control" && r.code));
+  });
+
+  it("courses=<root> is the per-variant sum; courses=<child> is one block with the parent's class in the header", async () => {
+    const root = await blocksOf({ courses: String(fk.rootSeq) });
+    expect(root.map((b) => [b.label, b.count, b.header?.classNames])).toEqual([["Long AB", 3, "H21"], ["Long BA", 3, "H21"]]);
+    const child = await blocksOf({ courses: String(fk.baSeq) });
+    expect(child.map((b) => [b.label, b.count, b.header?.classNames])).toEqual([["Long BA", 3, "H21"]]);
+    // A child asked with its root is absorbed.
+    expect((await blocksOf({ courses: `${fk.baSeq},${fk.rootSeq}` })).map((b) => b.label)).toEqual(["Long AB", "Long BA"]);
+  });
+
+  it("a plain class is unchanged; the route labels the pages per variant", async () => {
+    expect((await blocksOf({ classes: String(fk.plain) })).map((b) => [b.label, b.count])).toEqual([["H35", 0]]);
+    const res = await server.inject({ method: "GET", url: url(forked.nameId, `?classes=${fk.h21},${fk.plain}`) });
+    expect(res.statusCode).toBe(200);
+    expect(labels(await PDFDocument.load(res.rawPayload))).toEqual(["H21 AB", "H21 BA", "H35"]);
   }, 30_000);
 });

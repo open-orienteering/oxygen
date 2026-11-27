@@ -23,11 +23,13 @@ import { documentFrameSchema, mapFileMetadataFor } from "../../map-store/map-fil
 import { Prisma } from "../../generated/prisma/client.js";
 import {
   applyJobResult,
+  execute,
   getImportJob,
   INSTANCE_ID,
   kickImportJobs,
   startImportJob,
   sweepImportHousekeeping,
+  IMPORT_MAX_ATTEMPTS,
   type ImportJobRow,
 } from "../../map-store/jobs.js";
 import { registerMapUploadRoutes } from "../../map-store/upload-routes.js";
@@ -276,6 +278,89 @@ describe("import jobs from applyEventMap", () => {
     await ctx.db.mapImportJob.delete({ where: { id: live.id } });
   }, 60_000);
 
+  it("counts a claim per attempt: a fresh job ends with attempts 1", async () => {
+    const fresh = await ctx.db.mapImportJob.create({ data: { eventId: ctx.eventId, sourceHash: fixtureHash, state: "queued" } });
+    await kickImportJobs(ctx.db);
+    expect(await waitForTerminal(fresh.id)).toMatchObject({ state: "done", attempts: 1 });
+  }, 60_000);
+
+  it("re-claims a stale job with attempts left and counts the claim (attempts 2 -> 3, completes)", async () => {
+    const job = await ctx.db.mapImportJob.create({
+      data: { eventId: ctx.eventId, sourceHash: fixtureHash, state: "running", stage: "parse", claimedBy: "other-instance", attempts: IMPORT_MAX_ATTEMPTS - 1, heartbeatAt: new Date(Date.now() - 120_000) },
+    });
+    await kickImportJobs(ctx.db);
+    expect(await waitForTerminal(job.id)).toMatchObject({ state: "done", attempts: IMPORT_MAX_ATTEMPTS });
+  }, 60_000);
+
+  it("gives up a stale job that used all its attempts: failed IMPORT_ABANDONED, never run (MAP-5)", async () => {
+    const job = await ctx.db.mapImportJob.create({
+      data: { eventId: ctx.eventId, sourceHash: fixtureHash, state: "running", stage: "parse", claimedBy: "other-instance", attempts: IMPORT_MAX_ATTEMPTS, heartbeatAt: new Date(Date.now() - 120_000) },
+    });
+    await kickImportJobs(ctx.db);
+    const row = await getImportJob(ctx.db, job.id);
+    expect(row).toMatchObject({ state: "failed", attempts: IMPORT_MAX_ATTEMPTS, claimedBy: null });
+    expect(row?.error).toMatch(/^IMPORT_ABANDONED: .*3 attempts/);
+    // A live job with the same count is left alone: only silence is given up.
+    const live = await ctx.db.mapImportJob.create({
+      data: { eventId: ctx.eventId, sourceHash: fixtureHash, state: "running", stage: "parse", claimedBy: "other-instance", attempts: IMPORT_MAX_ATTEMPTS, heartbeatAt: new Date() },
+    });
+    await kickImportJobs(ctx.db);
+    expect(await getImportJob(ctx.db, live.id)).toMatchObject({ state: "running", claimedBy: "other-instance" });
+    await ctx.db.mapImportJob.delete({ where: { id: live.id } });
+  }, 30_000);
+
+  it("after IMPORT_ABANDONED a late terminal write by the old owner changes nothing", async () => {
+    const job = await ctx.db.mapImportJob.create({
+      data: { eventId: ctx.eventId, sourceHash: fixtureHash, state: "running", stage: "parse", claimedBy: INSTANCE_ID, attempts: IMPORT_MAX_ATTEMPTS, heartbeatAt: new Date(Date.now() - 120_000) },
+    });
+    await kickImportJobs(ctx.db);
+    const abandoned = await getImportJob(ctx.db, job.id);
+    expect(abandoned).toMatchObject({ state: "failed", claimedBy: null });
+    // The stalled owner wakes up and writes its result the way execute does: guarded by its claim.
+    const late = await ctx.db.mapImportJob.updateMany({
+      where: { id: job.id, claimedBy: INSTANCE_ID },
+      data: { state: "done", stage: "done", progress: 1, error: null, heartbeatAt: new Date() },
+    });
+    expect(late.count).toBe(0);
+    const after = await getImportJob(ctx.db, job.id);
+    expect(after).toMatchObject({ state: "failed", claimedBy: null });
+    expect(after?.error).toMatch(/^IMPORT_ABANDONED/);
+  }, 30_000);
+
+  it("a late owner whose job was abandoned runs execute and pins nothing", async () => {
+    const club = await ctx.db.clubMap.create({ data: { name: `late-owner-${suffix}` } });
+    const job = await ctx.db.mapImportJob.create({
+      data: { eventId: null, clubMapId: club.id, sourceHash: fixtureHash, state: "running", stage: "parse", claimedBy: INSTANCE_ID, attempts: IMPORT_MAX_ATTEMPTS, heartbeatAt: new Date(Date.now() - 120_000) },
+    });
+    await kickImportJobs(ctx.db);
+    const abandoned = await getImportJob(ctx.db, job.id);
+    expect(abandoned).toMatchObject({ state: "failed", claimedBy: null });
+    // The stalled owner still holds its in-memory row and runs to the end.
+    await execute(ctx.db, { ...abandoned!, state: "running", claimedBy: INSTANCE_ID });
+    expect(await ctx.db.clubMapVersion.count({ where: { clubMapId: club.id } })).toBe(0);
+    const after = await getImportJob(ctx.db, job.id);
+    expect(after).toMatchObject({ state: "failed", claimedBy: null });
+    expect(after?.error).toMatch(/^IMPORT_ABANDONED/);
+    await ctx.db.mapImportJob.delete({ where: { id: job.id } });
+    await ctx.db.clubMap.delete({ where: { id: club.id } });
+  }, 60_000);
+
+  it("an exhausted promote job removes its pending version", async () => {
+    const club = await ctx.db.clubMap.create({ data: { name: `abandon-${suffix}` } });
+    const layer: mapDocument.VersionPatch = [{ unitsPerMm: 100, ops: {}, symbols: [] }];
+    const version = await ctx.db.clubMapVersion.create({
+      data: { clubMapId: club.id, seq: 1, label: "doomed", sourceHash: fixtureHash, documentHash, patch: layer as unknown as Prisma.InputJsonArray },
+    });
+    const job = await ctx.db.mapImportJob.create({
+      data: { eventId: ctx.eventId, clubMapId: club.id, sourceHash: fixtureHash, patch: layer as unknown as Prisma.InputJsonArray, state: "running", stage: "parse", claimedBy: "other-instance", attempts: IMPORT_MAX_ATTEMPTS, heartbeatAt: new Date(Date.now() - 120_000) },
+    });
+    await kickImportJobs(ctx.db);
+    expect(await getImportJob(ctx.db, job.id)).toMatchObject({ state: "failed" });
+    expect(await ctx.db.clubMapVersion.findUnique({ where: { id: version.id } })).toBeNull();
+    await ctx.db.mapImportJob.delete({ where: { id: job.id } });
+    await ctx.db.clubMap.delete({ where: { id: club.id } });
+  }, 30_000);
+
   it("the status poll kicks a claimable job, enforces courses.view on event jobs, and returns the report when done", async () => {
     const queued = await ctx.db.mapImportJob.create({ data: { eventId: ctx.eventId, sourceHash: fixtureHash, state: "queued" } });
 
@@ -411,6 +496,26 @@ describe("chunked upload routes", () => {
     expect(row).toMatchObject({ eventId: ctx.eventId, fileName: "chunked.ocd", uploadedBy: setter.id, kind: null, finalisedHash: null });
   });
 
+  it("API-23: a chunk size that makes more than 4096 chunks is refused, at init and (a row inserted around it) at finalise", async () => {
+    const tooSmall = await init(eventHeaders(setter), { fileName: "tiny.ocd", bytes: 5000, chunkBytes: 1 });
+    expect(tooSmall.statusCode).toBe(400);
+    expect(tooSmall.json().error).toMatch(/at most 4096 chunks/);
+    const row = await ctx.db.mapUpload.create({ data: { eventId: ctx.eventId, fileName: "huge.ocd", declaredBytes: 134217728, chunkBytes: 1, uploadedBy: setter.id } });
+    const t0 = Date.now();
+    const res = await finalise(row.id, eventHeaders(setter));
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/too many chunks/);
+    expect(Date.now() - t0).toBeLessThan(2_000);
+  });
+
+  it("finalise names at most 100 missing chunks and the full count", async () => {
+    const row = await ctx.db.mapUpload.create({ data: { eventId: ctx.eventId, fileName: "many.ocd", declaredBytes: 4000, chunkBytes: 1, uploadedBy: setter.id } });
+    const res = await finalise(row.id, eventHeaders(setter));
+    expect(res.statusCode).toBe(409);
+    expect(res.json().missing).toHaveLength(100);
+    expect(res.json().missingCount).toBe(4000);
+  });
+
   it("chunks in any order, idempotent per index, with size, range and kind checks; finalise assembles, dedups and is idempotent", async () => {
     const { uploadId, chunkCount } = (await init(eventHeaders(setter))).json();
     expect(chunkCount).toBeGreaterThanOrEqual(3);
@@ -424,6 +529,7 @@ describe("chunked upload routes", () => {
     const incomplete = await finalise(uploadId, eventHeaders(setter));
     expect(incomplete.statusCode).toBe(409);
     expect(incomplete.json().missing).toEqual([...Array(chunkCount).keys()]);
+    expect(incomplete.json().missingCount).toBe(chunkCount);
 
     // Last chunk first, then the rest; chunk 1 twice.
     for (const n of [chunkCount - 1, ...Array.from({ length: chunkCount - 1 }, (_, i) => i), 1]) {

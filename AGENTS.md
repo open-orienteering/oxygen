@@ -163,6 +163,13 @@ shaped the original layout was retired in May 2026
   happens at the boundary via `toAbsolute` / `toRelative` in
   `packages/api/src/timeConvert.ts`. Internal calculations stay in
   deciseconds.
+- Relative `0` is "no time" and a start before ZeroTime is negative: test a
+  stored time with `hasTime()` / `{ not: 0 }`, never `> 0`. Human-entered
+  times go through `toRelativeChecked` (a time exactly at ZeroTime is
+  refused). Running times use `runningTimeDs` (midnight-safe).
+- "Now" and dates are in the event's zone (`events.time_zone`): use
+  `eventNowDs` / `timeOfDayDs`, never `Date#getHours` (the images run in UTC).
+  See `docs/system/registration-and-readout.md`, "Time model".
 - `cards.punches_raw` stores the legacy MeOS punch-list format
   `code-seconds.tenths;...` so the `parsePunches` round-trip is stable
   with the kiosk / matcher code that has not been ported yet.
@@ -178,7 +185,11 @@ shaped the original layout was retired in May 2026
 - `oxygen.set_updated_at()` keeps `updated_at` current on every UPDATE.
 - `oxygen.allocate_event_seq()` fills `seq` from `oxygen.event_seqs` on
   INSERT. Passing an explicit `seq` value is allowed (and is how the
-  migration tool preserves legacy IDs).
+  migration tool preserves legacy IDs, and how a checkout snapshot carries
+  the cloud's seqs); an explicit value also raises the table's counter to
+  at least `seq + 1` (never lowers it), so the next implicit insert cannot
+  collide. Restoring rows therefore creates the counters: merge a dump's
+  `event_seqs` with `GREATEST`, never `\copy` it over them.
 
 ### Conventions
 
@@ -336,7 +347,7 @@ If those settings drift back on, you'll start getting Dependabot PRs; fix the se
 
 ### ocad2geojson fork
 
-`ocad2geojson` upstream (`perliedman/ocad2geojson`) still bundles a deprecated `xmldom@0.6.0` (one critical and several high CVEs) plus an old `uuid@3.4.0` and `protocol-buffers-schema` chain. Oxygen consumes a fork at [`open-orienteering/ocad2geojson@v2.2.2-oxygen.1`](https://github.com/open-orienteering/ocad2geojson/tree/v2.2.2-oxygen.1) that tracks upstream master (v2.1.23 merged Aug 2026), replaces `xmldom` with `@xmldom/xmldom`, bumps `uuid` and `vt-pbf`, inlines the previously-patched color-fallback fix, fixes a scrambled SVG render order caused by order-less debug nodes in the no-fill double-line branch (see `docs/bugfixes/archive/powerline-render-order.md`), and since `v2.2.2-oxygen.1` reads text framing (colour, width, box borders, shadow offsets) and parses line-text (type 6) and rectangle (type 7) symbols instead of skipping them (`docs/map-import.md` §3.3; `ocadToSvg` still draws neither). The fork's working branch is `fix/security-2026`; the A12 reader work sits on `feat/oxygen-symbol-types-framing` on top of it, tagged `v2.2.2-oxygen.1`; a local checkout lives at `../ocad2geojson` with `upstream` (perliedman) and `marcus-kempe` (previous fork, retired) remotes. Upstream PR for the security part: [perliedman/ocad2geojson#34](https://github.com/perliedman/ocad2geojson/pull/34). When upstream merges it, switch back to the npm release and drop the fork reference from `packages/api/package.json` and `packages/web/package.json`.
+`ocad2geojson` upstream (`perliedman/ocad2geojson`) still bundles a deprecated `xmldom@0.6.0` (one critical and several high CVEs) plus an old `uuid@3.4.0` and `protocol-buffers-schema` chain. Oxygen consumes a fork at [`open-orienteering/ocad2geojson@v2.2.2-oxygen.1`](https://github.com/open-orienteering/ocad2geojson/tree/v2.2.2-oxygen.1) that tracks upstream master (v2.1.23 merged Aug 2026), replaces `xmldom` with `@xmldom/xmldom`, bumps `uuid` and `vt-pbf`, inlines the previously-patched color-fallback fix, fixes a scrambled SVG render order caused by order-less debug nodes in the no-fill double-line branch (see `docs/bugfixes/archive/powerline-render-order.md`), and since `v2.2.2-oxygen.1` reads text framing (colour, width, box borders, shadow offsets) and parses line-text (type 6) and rectangle (type 7) symbols instead of skipping them (`docs/map-import.md` §3.3; `ocadToSvg` still draws neither). The fork's working branch is `fix/security-2026`; the A12 reader work sits on `feat/oxygen-symbol-types-framing` on top of it, tagged `v2.2.2-oxygen.1`; a local checkout lives at `../ocad2geojson` with `upstream` (perliedman) and `marcus-kempe` (previous fork, retired) remotes. Upstream PR for the security part: [perliedman/ocad2geojson#34](https://github.com/perliedman/ocad2geojson/pull/34). When upstream merges it, switch back to the npm release and drop the fork reference from `packages/api/package.json` and `packages/web/package.json`. The repo also carries a local patch on top of the tag, `patches/ocad2geojson@2.2.2-oxygen.1.patch`, applied through `patchedDependencies` in `pnpm-workspace.yaml`; drop both once the fork tags `v2.2.2-oxygen.2` with the change.
 
 ## 15. Common Pitfalls
 

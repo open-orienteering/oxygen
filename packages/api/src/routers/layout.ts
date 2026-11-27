@@ -11,6 +11,8 @@ import {
   autoSheets,
   ensureAllControlsSheet,
   MAX_SETTER_GROUPS,
+  adoptToSetters,
+  type AdoptedSetters,
   moveToSetter,
   recalculateSheet,
   setterMaps,
@@ -89,6 +91,21 @@ export const layoutRouter = router({
           : await ctx.db.course.findFirst({ where: { eventId: ctx.event.id, seq: input.courseId, removed: false }, select: { id: true } });
       if (input.courseId !== undefined && !course) throw new TRPCError({ code: "NOT_FOUND", message: "Course not found" });
       return ctx.db.$transaction((tx) => setterMaps(tx, ctx.event.id, { courseUuid: course?.id ?? null, groups: input.groups }), AUTO_SHEETS_TX);
+    }),
+
+  /**
+   * *Add to nearest setter map* (CRS-002, §8 "Controls added after generation"): each of the scope's controls that is
+   * in no setter map joins the map whose group centroid is nearest. Windows stay until *Recalculate*.
+   */
+  adoptToSetters: coursesEditProcedure
+    .input(z.object({ courseId: z.number().int().positive().optional() }))
+    .mutation(async ({ ctx, input }): Promise<AdoptedSetters> => {
+      const course =
+        input.courseId === undefined
+          ? null
+          : await ctx.db.course.findFirst({ where: { eventId: ctx.event.id, seq: input.courseId, removed: false }, select: { id: true } });
+      if (input.courseId !== undefined && !course) throw new TRPCError({ code: "NOT_FOUND", message: "Course not found" });
+      return ctx.db.$transaction((tx) => adoptToSetters(tx, ctx.event.id, { courseUuid: course?.id ?? null }), AUTO_SHEETS_TX);
     }),
 
   /** *Move to next setter* (§8): the control (public id) leaves its setter map of `sheet`'s scope for `sheet`; windows stay. */

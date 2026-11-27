@@ -4,6 +4,13 @@ import { uploadEventMap } from "./helpers/map-upload";
 import { getMockWebSerialScript } from "./helpers/mock-webserial";
 import { connectMockSerialReader } from "./helpers/reader";
 import { waitForTrpc } from "./helpers/trpc";
+import { setRunnerCardNo } from "./helpers/runner-result";
+
+// Malin Johannesson holds SI6 card 501438 in the seed; SI6 is read as detection
+// only (no finish), so these specs give her an SI8-range card the mock reads in
+// full (helpers/runner-result.ts).
+const SEED_CARD = 501438;
+const FULL_READ_CARD = 2401438;
 
 // Declare the global mock interface for TypeScript
 declare global {
@@ -14,6 +21,7 @@ declare global {
         punches?: Array<{ controlCode: number; time: number }>,
         options?: {
           hasFinish?: boolean;
+          silentBlocks?: number[];
           ownerData?: {
             firstName?: string;
             lastName?: string;
@@ -50,6 +58,8 @@ test.beforeEach(async ({ page }) => {
 // ─── Tests ─────────────────────────────────────────────────
 
 test.describe("WebSerial SI Reader", () => {
+  // The readout spec re-numbers a seed runner (setRunnerCardNo); put the seed back.
+  test.afterAll(reseed);
   test("connects reader and shows status indicator", async ({ page }) => {
     await selectCompetition(page);
     await expect(page.getByTestId("reader-menu")).toBeVisible();
@@ -95,7 +105,34 @@ test.describe("WebSerial SI Reader", () => {
     expect(await page.evaluate(() => window.__siMock.isConnected())).toBe(false);
   });
 
+  test("a card that cannot be read completely shows a banner and no readout", async ({ page }) => {
+    await selectCompetition(page);
+    await connectMockSerialReader(page, 5000);
+
+    // Block 1 never arrives: the reader asks again once, then gives up (~4 s).
+    await page.evaluate(() =>
+      window.__siMock.insertCard(2401438, [{ controlCode: 31, time: 36360 }], { silentBlocks: [1] }),
+    );
+
+    const banner = page.getByTestId("card-read-failed-banner");
+    await expect(banner).toBeVisible({ timeout: 10000 });
+    await expect(banner).toContainText("2401438");
+    await expect(banner).toContainText("was not read");
+    // No result row and no readout notification for a card that was not read.
+    await expect(page.getByTestId("card-notification")).toHaveCount(0);
+
+    // The same card inserted again, this time answered in full, is read.
+    await page.evaluate(() => window.__siMock.removeCard());
+    const readout = waitForTrpc(page, "cardReadout.readout");
+    await page.evaluate(() =>
+      window.__siMock.insertCard(2401438, [{ controlCode: 31, time: 36360 }]),
+    );
+    await readout;
+    await expect(page.getByTestId("card-notification")).toBeVisible({ timeout: 5000 });
+  });
+
   test("readout notification navigates to card readout", async ({ page }) => {
+    await setRunnerCardNo("itest", SEED_CARD, FULL_READ_CARD);
     await selectCompetition(page);
 
     await connectMockSerialReader(page, 5000);
@@ -103,7 +140,7 @@ test.describe("WebSerial SI Reader", () => {
     const resolutionPromise = waitForTrpc(page, "cardReadout.readout");
 
     await page.evaluate(() =>
-      window.__siMock.insertCard(501438, [
+      window.__siMock.insertCard(2401438, [
         { controlCode: 31, time: 36360 },
         { controlCode: 32, time: 36420 },
         { controlCode: 33, time: 36480 },
@@ -113,13 +150,13 @@ test.describe("WebSerial SI Reader", () => {
     await resolutionPromise;
 
     await expect(page.getByTestId("card-notification")).toBeVisible({ timeout: 5000 });
-    await expect(page.getByTestId("card-notification")).toContainText("501438");
+    await expect(page.getByTestId("card-notification")).toContainText("2401438");
     await expect(page.getByTestId("card-notification-view")).toContainText("View Readout");
 
     await page.getByTestId("card-notification-view").click();
 
-    await expect(page).toHaveURL(/card-readout.*card=501438/);
-    await expect(page.getByPlaceholder("Enter SI card number...")).toHaveValue("501438");
+    await expect(page).toHaveURL(/card-readout.*card=2401438/);
+    await expect(page.getByPlaceholder("Enter SI card number...")).toHaveValue("2401438");
   });
 
   test("should auto-populate card readout page on card read", async ({
@@ -338,6 +375,7 @@ test.describe("post-readout map", () => {
 
   test("the card readout map draws the map document", async ({ page }) => {
     test.setTimeout(120_000);
+    await setRunnerCardNo("itest", SEED_CARD, FULL_READ_CARD);
     await selectCompetition(page);
     const viewer = page.getByTestId("map-viewer").first();
     const upload = page.getByTestId("map-panel").first().getByRole("button", { name: "Upload map" });
@@ -348,7 +386,7 @@ test.describe("post-readout map", () => {
     await connectMockSerialReader(page, 5000);
     const resolved = waitForTrpc(page, "cardReadout.readout");
     await page.evaluate(() =>
-      window.__siMock.insertCard(501438, [
+      window.__siMock.insertCard(2401438, [
         { controlCode: 31, time: 36360 },
         { controlCode: 32, time: 36420 },
         { controlCode: 33, time: 36480 },
@@ -356,7 +394,7 @@ test.describe("post-readout map", () => {
     );
     await resolved;
     await page.getByTestId("card-notification-view").click();
-    await expect(page).toHaveURL(/card-readout.*card=501438/);
+    await expect(page).toHaveURL(/card-readout.*card=2401438/);
 
     const readoutMap = page.getByTestId("map-viewer").last();
     await expect(readoutMap).toBeVisible({ timeout: 60_000 });

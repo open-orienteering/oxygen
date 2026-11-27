@@ -28,6 +28,7 @@ services:
     environment:
       DATABASE_URL: "postgresql://oxygen:oxygen@postgres:5432/oxygen?schema=oxygen"
       PORT: "3001"
+      TZ: "${TZ:-Europe/Stockholm}"
       HOST: "0.0.0.0"
     ports:
       - "3001:3001"

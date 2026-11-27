@@ -74,6 +74,8 @@ resolves against the base's *directory*, so an override of
 |--------|------|----------|
 | `GET` | `/organisation/apiKey` | `Organisation` 1234 / "E2E Test Club" |
 | `GET` | `/events` | `EventList` with three events dated **today** |
+| `GET` | `/eventclasses`, `/entries`, `/export/classes`, `/results/event`, `/starts/event/iofxml` for event `90001` only | the sync spec's event: classes H21 / H35 and entries per scenario |
+| `POST` | `/__scenario/<n>` (no `ApiKey`) | switches event 90001 between scenario 1 (Andersson card 500001, Berg) and 2 (Andersson card 500002, Berg gone, Carlsson entered) |
 | any | anything else | `404` naming the method and path |
 | any | request with no `ApiKey` header | `403` (maps to `EventorAuthError`) |
 
@@ -103,6 +105,14 @@ API key and show event list") was `test.skip`ped with the comment
 runs: it enters the key on the admin-only Settings → Eventor tab, then
 asserts against the stub's organisation and event names on the selector's
 import panel so it fails if the list stops reaching the UI.
+
+## Upload stall mode
+
+`POST /__upload/stall` makes the stub accept a `POST /import/*` (results or
+start list) and never answer it; `POST /__upload/ok` (the default) answers
+`200`. The E2E API runs with `EVENTOR_UPLOAD_TIMEOUT_MS=2000`
+(`playwright.config.ts`), so `e2e/eventor-push.spec.ts` sees the
+outcome-unknown notice after 2 s instead of 60 s.
 
 ## What is still not covered
 

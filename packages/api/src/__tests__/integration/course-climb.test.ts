@@ -11,16 +11,38 @@
  * its `contours` field derived and stored.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { mapDocument } from "@oxygen/shared";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { FLAT, HILL, encodeTerrainDoc } from "../helpers/terrain-doc.js";
 import { deriveDocumentHeightfield, readHeightfield } from "../../map-store/heightfield.js";
-import { refreshMarkedClimbs, resetClimbFields } from "../../course-climb.js";
+import { computeMissingClimbs, refreshComputedClimbs, refreshMarkedClimbs, resetClimbFields } from "../../course-climb.js";
+import { acquireLease, releaseLease } from "../../sync/lease.js";
 import { withClimbMarks } from "../../course-climb-pending.js";
+import { _contourIntervalRuns, awaitContourIntervalJobs, enqueueContourInterval, eventsOnClubMap } from "../../map-store/contour-interval-apply.js";
 import { rebuildCourseLengths } from "../../course-geometry.js";
+
+// The reads of the event's chosen routes, and a hook that runs after a course's climb has been journaled.
+const spy = vi.hoisted(() => ({ routeReads: 0, afterEmit: null as null | (() => Promise<void>), beforeRoutes: null as null | (() => Promise<void>) }));
+vi.mock("../../leg-routes.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../leg-routes.js")>();
+  return { ...real, chosenLegRoutes: async (...args: Parameters<typeof real.chosenLegRoutes>) => { spy.routeReads++; const hook = spy.beforeRoutes; spy.beforeRoutes = null; await hook?.(); return real.chosenLegRoutes(...args); } };
+});
+vi.mock("../../referenceJournal.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../referenceJournal.js")>();
+  return {
+    ...real,
+    emitCourseUpserted: async (...args: Parameters<typeof real.emitCourseUpserted>) => {
+      const out = await real.emitCourseUpserted(...args);
+      const hook = spy.afterEmit;
+      spy.afterEmit = null;
+      await hook?.();
+      return out;
+    },
+  };
+});
 
 const suffix = randomBytes(4).toString("hex");
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
@@ -31,7 +53,8 @@ let caller: ReturnType<typeof makeCaller>;
 let flatCaller: ReturnType<typeof makeCaller>;
 let top: number;
 
-async function pinDocument(t: TestEventContext, objects: typeof HILL, salt: string): Promise<string> {
+/** The hill's document pinned to the event; `intervalM` is the interval a person confirmed (null: not confirmed). */
+async function pinDocument(t: TestEventContext, objects: typeof HILL, salt: string, intervalM: number | null = 5): Promise<string> {
   const sourceBytes = Buffer.from(`course-climb-source-${salt}`);
   const sourceHash = sha(sourceBytes);
   await t.db.mapSource.create({ data: { fileHash: sourceHash, kind: "ocad", bytes: sourceBytes, sizeBytes: sourceBytes.byteLength, fileName: "synthetic.ocd" } });
@@ -44,7 +67,7 @@ async function pinDocument(t: TestEventContext, objects: typeof HILL, salt: stri
       header: JSON.parse(JSON.stringify({ ...header, symbols: undefined, strings: undefined })), report: {},
     },
   });
-  await t.db.mapFile.create({ data: { eventId: t.eventId, fileName: "synthetic.ocd", sourceHash, documentHash: hash, scale: 15000 } });
+  await t.db.mapFile.create({ data: { eventId: t.eventId, fileName: "synthetic.ocd", sourceHash, documentHash: hash, scale: 15000, contourIntervalM: intervalM } });
   return hash;
 }
 
@@ -104,12 +127,12 @@ describe("the course's stored climb (docs/course-elevation.md §6)", () => {
     expect(await climbOf(over)).toEqual(before);
   });
 
-  it("the computed climb is journaled without its source and does not advance the course's token", async () => {
+  it("the computed climb is journaled with its source and does not advance the course's token", async () => {
     const row = await rowOf(ctx, over);
     const entries = await ctx.db.journalEntry.findMany({ where: { eventId: ctx.eventId, type: "course.upserted" }, orderBy: { hlc: "desc" }, take: 1 });
     const fields = (entries[0].payload as { fields: Record<string, unknown> }).fields;
     expect(fields.climbM).toBe(row.climbM);
-    expect("climbSource" in fields).toBe(false);
+    expect(fields.climbSource).toBe("computed");
     expect(BigInt(String(fields.version))).toBe(row.version);
   });
 
@@ -218,12 +241,44 @@ describe("the course's stored climb (docs/course-elevation.md §6)", () => {
     expect(await climbOf(over)).toEqual(before);
   });
 
-  it("a climb arriving through the journal is held as a typed one, and a cleared one is computed again", async () => {
+  it("course.update moving the course's ends clears a computed climb and computes it again", async () => {
+    const before = await climbOf(over);
+    expect(before.source).toBe("computed");
+    // A stale number the compute would not write: the update must not leave it standing.
+    await ctx.db.course.updateMany({ where: { eventId: ctx.eventId, seq: over }, data: { climbM: 777, climbSource: "computed" } });
+    await caller.course.update({ id: over, firstAsStart: true });
+    expect((await climbOf(over)).m).not.toBe(777);
+    await ctx.db.course.updateMany({ where: { eventId: ctx.eventId, seq: over }, data: { climbM: 777, climbSource: "computed" } });
+    await caller.course.update({ id: over, firstAsStart: false });
+    expect(await climbOf(over)).toEqual(before);
+    await ctx.db.course.updateMany({ where: { eventId: ctx.eventId, seq: over }, data: { climbM: 777, climbSource: "computed" } });
+    await caller.course.update({ id: over, lastAsFinish: false });
+    expect((await climbOf(over)).m).not.toBe(777);
+  });
+
+  it("a clear outside an edit that journals the course journals the cleared row itself (§6)", async () => {
+    // The flat event's field is not stored: after a route is chosen the course gets no climb, but the clear is journaled.
+    const a = (await flatCaller.control.create({ codes: "41", xpos: 8, ypos: 20 })).id;
+    const b = (await flatCaller.control.create({ codes: "42", xpos: 30, ypos: 20 })).id;
+    const id = (await flatCaller.course.create({ name: "Cleared", controlIds: [a, b] })).id;
+    const row = await rowOf(flat, id);
+    await flat.db.course.update({ where: { id: row.id }, data: { climbM: 55, climbSource: "computed" } });
+    const latest = async () => {
+      const e = await flat.db.journalEntry.findFirstOrThrow({ where: { eventId: flat.eventId, type: "course.upserted", payload: { path: ["id"], equals: row.id } }, orderBy: { hlc: "desc" } });
+      return (e.payload as { fields: { climbM: number } }).fields.climbM;
+    };
+    await flatCaller.legRoute.save({ fromControlId: a, toControlId: b, points: [{ x: 18, y: 30 }] });
+    expect((await rowOf(flat, id)).climbM).toBe(0);
+    expect(await latest()).toBe(0);
+  });
+
+  it("a climb arriving through the journal from a sender that does not know the source is held as a typed one, and a cleared one is computed again", async () => {
     const row = await rowOf(ctx, over);
     const computed = await climbOf(over);
     expect(computed.source).toBe("computed");
     const latest = await ctx.db.journalEntry.findFirstOrThrow({ where: { eventId: ctx.eventId, type: "course.upserted", payload: { path: ["id"], equals: row.id } }, orderBy: { hlc: "desc" } });
-    const payload = latest.payload as { fields: Record<string, unknown> };
+    const { climbSource: _source, ...oldFields } = (latest.payload as { fields: Record<string, unknown> }).fields;
+    const payload = { ...(latest.payload as object), fields: oldFields };
     const push = async (climbM: number) => {
       const res = await caller.events.push({
         events: [{ id: randomUUID(), type: "course.upserted" as never, competitionId: ctx.event.nameId, stationId: "peer", timestamp: Date.now(), payload: { ...payload, fields: { ...payload.fields, climbM } } as Record<string, unknown> }],
@@ -244,6 +299,30 @@ describe("the course's stored climb (docs/course-elevation.md §6)", () => {
     expect(await climbOf(over)).toEqual(computed);
   });
 
+  it("a computed climb arriving through the journal stays computed, and an interval change clears it (review package 23)", async () => {
+    const row = await rowOf(ctx, over);
+    const computed = await climbOf(over);
+    expect(computed.source).toBe("computed");
+    const latest = await ctx.db.journalEntry.findFirstOrThrow({ where: { eventId: ctx.eventId, type: "course.upserted", payload: { path: ["id"], equals: row.id } }, orderBy: { hlc: "desc" } });
+    const payload = latest.payload as { fields: Record<string, unknown> };
+    expect(payload.fields.climbSource).toBe("computed");
+    // The peer's row: a typed climb here, the holder's computed one arriving over it.
+    await ctx.db.course.update({ where: { id: row.id }, data: { climbM: 0, climbSource: "manual" } });
+    const res = await caller.events.push({
+      events: [{ id: randomUUID(), type: "course.upserted" as never, competitionId: ctx.event.nameId, stationId: "holder", timestamp: Date.now(), payload: payload as Record<string, unknown> }],
+    });
+    expect(res.failed).toEqual([]);
+    expect(await climbOf(over)).toEqual(computed);
+    // An interval change clears it (and the compute that follows stores the new one).
+    await caller.course.setContourInterval({ intervalM: 2.5 });
+    await awaitContourIntervalJobs();
+    const halved = await climbOf(over);
+    expect(halved.source).toBe("computed");
+    expect(halved.m).toBeLessThan(computed.m);
+    await caller.course.setContourInterval({ intervalM: 5 });
+    await awaitContourIntervalJobs();
+  });
+
   it("a typed source over an empty climb is no climb: the compute fills it", async () => {
     const row = await rowOf(ctx, over);
     const computed = await climbOf(over);
@@ -257,6 +336,260 @@ describe("the course's stored climb (docs/course-elevation.md §6)", () => {
     await expect(ctx.db.$executeRaw`UPDATE "oxygen"."courses" SET "climb_source" = 'guess' WHERE "id" = ${row.id}::uuid`).rejects.toThrow();
     for (const s of ["manual", "file", "computed"]) {
       await ctx.db.$executeRaw`UPDATE "oxygen"."courses" SET "climb_source" = ${s} WHERE "id" = ${row.id}::uuid`;
+    }
+  });
+});
+
+describe("the compute under a lease and over many courses (docs/course-elevation.md §6)", () => {
+  const journal = () => ctx.db.journalEntry.count({ where: { eventId: ctx.eventId, type: "course.upserted" } });
+  const uuidOf = async (code: string) => (await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, codes: code } })).id;
+
+  it("a node that does not hold the event's lease computes nothing and journals nothing; a courseObject write there succeeds and touches no course", async () => {
+    await ctx.db.course.updateMany({ where: { eventId: ctx.eventId, removed: false }, data: { climbM: 0, climbSource: null } });
+    const before = JSON.stringify((await ctx.db.course.findMany({ where: { eventId: ctx.eventId }, orderBy: { id: "asc" } })).map((c) => [c.id, c.climbM, c.climbSource]));
+    const entries = await journal();
+    await acquireLease(ctx.db, ctx.eventId, "venue-d8");
+    try {
+      expect(await computeMissingClimbs(ctx.db, ctx.eventId)).toBe(0);
+      expect(await refreshComputedClimbs(ctx.db, ctx.eventId)).toBe(0);
+      const { marks } = await withClimbMarks(async () => { await rebuildCourseLengths(ctx.db, ctx.eventId, [], {}); });
+      expect(await refreshMarkedClimbs(ctx.db, marks)).toBe(0);
+      // The cloud-owned write goes ahead and enqueues a route refresh that does nothing.
+      await caller.courseObject.create({ kind: "oob_area", geometry: [{ x: 1, y: 1 }, { x: 3, y: 1 }, { x: 3, y: 3 }], props: {}, scope: { all: true } });
+      expect(JSON.stringify((await ctx.db.course.findMany({ where: { eventId: ctx.eventId }, orderBy: { id: "asc" } })).map((c) => [c.id, c.climbM, c.climbSource]))).toBe(before);
+      expect(await journal()).toBe(entries);
+    } finally {
+      await releaseLease(ctx.db, ctx.eventId);
+    }
+    expect(await refreshComputedClimbs(ctx.db, ctx.eventId)).toBeGreaterThan(0);
+  });
+
+  it("the event's chosen routes are read once for an all-courses compute, and again only when a route was chosen in between", async () => {
+    const p = (await caller.control.create({ codes: "61", xpos: 10, ypos: 30 })).id;
+    const q = (await caller.control.create({ codes: "62", xpos: 50, ypos: 30 })).id;
+    const first = (await caller.course.create({ name: "Over the line 1", controlIds: [p, q] })).id;
+    const second = (await caller.course.create({ name: "Over the line 2", controlIds: [p, q] })).id;
+    const clear = () => ctx.db.course.updateMany({ where: { eventId: ctx.eventId, removed: false }, data: { climbM: 0, climbSource: null } });
+    const courses = await ctx.db.course.count({ where: { eventId: ctx.eventId, removed: false, orderMode: "ordered" } });
+    expect(courses).toBeGreaterThanOrEqual(3);
+
+    await clear();
+    spy.routeReads = 0;
+    expect(await computeMissingClimbs(ctx.db, ctx.eventId)).toBeGreaterThanOrEqual(3);
+    expect(spy.routeReads).toBe(1);
+    const along = (await climbOf(first)).m;
+    expect(along).toBeGreaterThan(0);
+    expect((await climbOf(second)).m).toBe(along);
+
+    // A route chosen after the first course was written, before the second: the second reads along it.
+    await clear();
+    const route = { eventId: ctx.eventId, fromControlId: await uuidOf("61"), toControlId: await uuidOf("62"), points: [{ x: 30, y: 58 }], source: "drawn", chosen: true };
+    spy.afterEmit = async () => { await ctx.db.legRoute.create({ data: route }); };
+    spy.routeReads = 0;
+    const ids = (await ctx.db.course.findMany({ where: { eventId: ctx.eventId, seq: { in: [first, second] } }, orderBy: { id: "asc" } })).map((c) => c.id);
+    await computeMissingClimbs(ctx.db, ctx.eventId, ids);
+    expect(spy.routeReads).toBe(2);
+    const [a, b] = (await ctx.db.course.findMany({ where: { eventId: ctx.eventId, seq: { in: [first, second] } }, orderBy: { id: "asc" } })).map((c) => c.climbM);
+    expect(a).toBe(along);
+    expect(b).toBeLessThan(along);
+    await ctx.db.legRoute.deleteMany({ where: { eventId: ctx.eventId, fromControlId: route.fromControlId } });
+    await caller.course.delete({ id: first });
+    await caller.course.delete({ id: second });
+  });
+});
+
+describe("the contour interval gates the stored climb (docs/course-elevation.md §0.43)", () => {
+  let t: TestEventContext;
+  let c: ReturnType<typeof makeCaller>;
+  let doc: { sourceHash: string; hash: string };
+  let course1: number;
+  const climb = async (seq: number) => { const r = await rowOf(t, seq); return { m: r.climbM, source: r.climbSource }; };
+  const journalFor = (id: string) => t.db.journalEntry.count({ where: { eventId: t.eventId, type: "course.upserted", payload: { path: ["id"], equals: id } } });
+
+  beforeAll(async () => {
+    t = await createTestEvent("course_climb_interval");
+    c = makeCaller(t.event);
+    const hash = await pinDocument(t, HILL, `interval-${suffix}`, null);
+    await deriveDocumentHeightfield(t.db, hash);
+    const file = await t.db.mapFile.findFirstOrThrow({ where: { eventId: t.eventId } });
+    doc = { sourceHash: file.sourceHash!, hash };
+    await c.control.create({ status: 4, xpos: 12, ypos: 30 });
+    await c.control.create({ status: 5, xpos: 48, ypos: 30 });
+    const top1 = (await c.control.create({ codes: "31", xpos: 30, ypos: 30 })).id;
+    course1 = (await c.course.create({ name: "Interval", controlIds: [top1] })).id;
+  });
+  afterAll(async () => { await t.cleanup(); });
+
+  it("an unconfirmed interval stores no climb, after an edit or after refreshClimbs; the estimate is the editor's", async () => {
+    expect(await climb(course1)).toEqual({ m: 0, source: null });
+    await c.course.refreshClimbs();
+    expect(await climb(course1)).toEqual({ m: 0, source: null });
+    const meta = await c.course.mapMetadata();
+    expect(meta!.contourInterval).toEqual({ assumedM: 5, confirmedM: null, from: "event", mayChange: true, suspect: false });
+    expect(meta!.terrain!.interval).toEqual({ assumedM: 5, confirmedM: null });
+  });
+
+  it("confirming the interval stores the climb and journals it; another interval scales it; clearing removes it again", async () => {
+    const row = await rowOf(t, course1);
+    const before = await journalFor(row.id);
+    await c.course.setContourInterval({ intervalM: 5 });
+    await awaitContourIntervalJobs();
+    const at5 = await climb(course1);
+    expect(at5.source).toBe("computed");
+    expect(at5.m).toBeGreaterThanOrEqual(12);
+    expect(await journalFor(row.id)).toBeGreaterThan(before);
+    expect((await c.course.mapMetadata())!.contourInterval).toMatchObject({ confirmedM: 5, from: "event" });
+
+    await c.course.setContourInterval({ intervalM: 2.5 });
+    await awaitContourIntervalJobs();
+    const at25 = await climb(course1);
+    expect(at25.source).toBe("computed");
+    expect(Math.abs(at25.m - at5.m / 2)).toBeLessThanOrEqual(1.5);
+
+    await c.course.setContourInterval({ intervalM: null });
+    await awaitContourIntervalJobs();
+    expect(await climb(course1)).toEqual({ m: 0, source: null });
+    // A typed climb is untouched by any change of the interval.
+    await c.course.update({ id: course1, climb: 77 });
+    await c.course.setContourInterval({ intervalM: 5 });
+    await awaitContourIntervalJobs();
+    expect(await climb(course1)).toEqual({ m: 77, source: "manual" });
+    await c.course.update({ id: course1, climb: null });
+    expect((await climb(course1)).source).toBe("computed");
+  });
+
+  it("an interval that changes while the compute runs: nothing is stored at the old one", async () => {
+    await c.course.setContourInterval({ intervalM: 5 });
+    await awaitContourIntervalJobs();
+    await c.course.update({ id: course1, climb: 77 });
+    await c.course.update({ id: course1, climb: null });
+    const row = await rowOf(t, course1);
+    await t.db.course.update({ where: { id: row.id }, data: { climbM: 0, climbSource: null } });
+    // The sampler is built at 5 m; the interval changes before the course's transaction.
+    spy.beforeRoutes = async () => { await t.db.mapFile.updateMany({ where: { eventId: t.eventId }, data: { contourIntervalM: 2.5 } }); };
+    expect(await computeMissingClimbs(t.db, t.eventId)).toBe(0);
+    expect(await climb(course1)).toEqual({ m: 0, source: null });
+    // The next compute runs at the new one.
+    expect(await computeMissingClimbs(t.db, t.eventId)).toBe(1);
+    await c.course.setContourInterval({ intervalM: 5 });
+    await awaitContourIntervalJobs();
+  });
+
+  it("requests that arrive while a run is going coalesce into one more run; an unknown club map has no events", async () => {
+    await c.course.setContourInterval({ intervalM: 5 });
+    await awaitContourIntervalJobs();
+    const before = _contourIntervalRuns();
+    enqueueContourInterval(t.db, [t.eventId]);
+    enqueueContourInterval(t.db, [t.eventId]);
+    enqueueContourInterval(t.db, [t.eventId]);
+    await awaitContourIntervalJobs();
+    expect(_contourIntervalRuns() - before).toBe(2);
+    expect((await climb(course1)).source).toBe("computed");
+    // No club map, no events.
+    expect(await eventsOnClubMap(t.db, "00000000-0000-7000-8000-000000000000")).toEqual([]);
+  });
+
+  it("refuses a value outside what a map's interval can be", async () => {
+    for (const intervalM of [0, -5, 101, 2.555, Number.NaN]) await expect(c.course.setContourInterval({ intervalM })).rejects.toThrow();
+    await c.course.setContourInterval({ intervalM: 2.5 });
+    await awaitContourIntervalJobs();
+    await c.course.setContourInterval({ intervalM: 5 });
+    await awaitContourIntervalJobs();
+  });
+
+  it("a club map's interval follows every event using it; the club map takes the setting made from an event", async () => {
+    const other = await createTestEvent("course_climb_interval_club");
+    try {
+      await c.course.setContourInterval({ intervalM: null });
+      await awaitContourIntervalJobs();
+      const series = await t.db.clubMap.create({ data: { name: `Interval club ${suffix}` } });
+      const version = await t.db.clubMapVersion.create({ data: { clubMapId: series.id, seq: 1, sourceHash: doc.sourceHash, documentHash: doc.hash } });
+      await t.db.mapFile.updateMany({ where: { eventId: t.eventId }, data: { clubMapVersionId: version.id, contourIntervalM: null } });
+      await other.db.mapFile.create({ data: { eventId: other.eventId, fileName: "synthetic.ocd", sourceHash: doc.sourceHash, documentHash: doc.hash, scale: 15000, clubMapVersionId: version.id } });
+      const oc = makeCaller(other.event);
+      await oc.control.create({ status: 4, xpos: 12, ypos: 30 });
+      await oc.control.create({ status: 5, xpos: 48, ypos: 30 });
+      const topO = (await oc.control.create({ codes: "31", xpos: 30, ypos: 30 })).id;
+      const courseO = (await oc.course.create({ name: "Other", controlIds: [topO] })).id;
+      // The club map has no interval: neither event stores a climb, whatever its own column says.
+      expect((await climb(course1)).m).toBe(0);
+      expect((await rowOf(other, courseO)).climbM).toBe(0);
+
+      // A removed event is nobody's to compute for.
+      await other.db.event.update({ where: { id: other.eventId }, data: { removed: true } });
+      await makeCaller(t.event, {}).clubMap.setContourInterval({ id: series.id, intervalM: 5 });
+      await awaitContourIntervalJobs();
+      expect((await climb(course1)).source).toBe("computed");
+      expect((await rowOf(other, courseO)).climbM).toBe(0);
+      await other.db.event.update({ where: { id: other.eventId }, data: { removed: false } });
+      await makeCaller(t.event, {}).clubMap.setContourInterval({ id: series.id, intervalM: 5 });
+      await awaitContourIntervalJobs();
+      expect((await climb(course1)).source).toBe("computed");
+      expect((await rowOf(other, courseO)).climbSource).toBe("computed");
+      expect((await oc.course.mapMetadata())!.contourInterval).toMatchObject({ confirmedM: 5, from: "club" });
+      const listed = (await makeCaller(t.event).clubMap.list()).find((s) => s.id === series.id)!;
+      expect(listed.contourIntervalM).toBe(5);
+      expect(listed.assumedContourIntervalM).toBe(5);
+
+      // Set from an event of the series: the club map is written, both follow.
+      await oc.course.setContourInterval({ intervalM: null });
+      await awaitContourIntervalJobs();
+      expect((await t.db.clubMap.findUniqueOrThrow({ where: { id: series.id } })).contourIntervalM).toBeNull();
+      expect((await climb(course1)).m).toBe(0);
+      expect((await rowOf(other, courseO)).climbM).toBe(0);
+
+      // The exporter writes the resolved value into the file row a box will read.
+      await t.db.clubMap.update({ where: { id: series.id }, data: { contourIntervalM: 2.5 } });
+      const { exportSnapshotMaps } = await import("../../sync/snapshotMaps.js");
+      const exported = await exportSnapshotMaps(t.db, t.eventId);
+      expect(exported.files.map((f) => f.contourIntervalM)).toEqual([2.5]);
+      await t.db.mapFile.updateMany({ where: { eventId: t.eventId }, data: { clubMapVersionId: null, contourIntervalM: 5 } });
+      await t.db.clubMap.delete({ where: { id: series.id } });
+    } finally {
+      await other.cleanup();
+    }
+  });
+
+  it("deleting a club map or its version leaves the events its confirmed interval on their own rows", async () => {
+    await c.course.setContourInterval({ intervalM: null });
+    await awaitContourIntervalJobs();
+    const own = async () => (await t.db.mapFile.findFirstOrThrow({ where: { eventId: t.eventId } })).contourIntervalM;
+    for (const how of ["series", "version"] as const) {
+      const series = await t.db.clubMap.create({ data: { name: `Interval remove ${how} ${suffix}`, contourIntervalM: 2.5 } });
+      const v = await t.db.clubMapVersion.create({ data: { clubMapId: series.id, seq: 1, sourceHash: doc.sourceHash, documentHash: doc.hash } });
+      await t.db.mapFile.updateMany({ where: { eventId: t.eventId }, data: { clubMapVersionId: v.id, contourIntervalM: null } });
+      expect((await c.course.mapMetadata())!.contourInterval).toMatchObject({ confirmedM: 2.5, from: "club" });
+      if (how === "series") await makeCaller(null).clubMap.remove({ id: series.id });
+      else {
+        // Only a promoted latest version can be removed on its own: give it a layer.
+        const v2 = await t.db.clubMapVersion.create({ data: { clubMapId: series.id, seq: 2, sourceHash: doc.sourceHash, documentHash: doc.hash, patch: [{ unitsPerMm: 100, symbols: [], ops: { "hide:1": { op: "hide", sourceIndex: 1 } } }] as never } });
+        await t.db.mapFile.updateMany({ where: { eventId: t.eventId }, data: { clubMapVersionId: v2.id } });
+        await makeCaller(null).clubMap.removeVersion({ id: series.id, versionId: v2.id });
+      }
+      expect(await own()).toBe(2.5);
+      expect((await c.course.mapMetadata())!.contourInterval).toMatchObject({ confirmedM: 2.5, from: "event" });
+      await t.db.mapFile.updateMany({ where: { eventId: t.eventId }, data: { clubMapVersionId: null, contourIntervalM: null } });
+      await t.db.clubMap.deleteMany({ where: { id: series.id } });
+    }
+    await c.course.setContourInterval({ intervalM: 5 });
+    await awaitContourIntervalJobs();
+  });
+
+  it("under a foreign lease the value is written and no course row is touched; the holder's map refresh does the rest", async () => {
+    await c.course.setContourInterval({ intervalM: 5 });
+    await awaitContourIntervalJobs();
+    const row = await rowOf(t, course1);
+    expect(row.climbSource).toBe("computed");
+    const before = await journalFor(row.id);
+    await acquireLease(t.db, t.eventId, "venue-d8");
+    try {
+      await c.course.setContourInterval({ intervalM: 2.5 });
+      await awaitContourIntervalJobs();
+      expect((await t.db.mapFile.findFirstOrThrow({ where: { eventId: t.eventId } })).contourIntervalM).toBe(2.5);
+      expect(await rowOf(t, course1)).toMatchObject({ climbM: row.climbM, climbSource: "computed" });
+      expect(await journalFor(row.id)).toBe(before);
+    } finally {
+      await releaseLease(t.db, t.eventId);
     }
   });
 });

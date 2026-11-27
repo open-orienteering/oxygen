@@ -1,13 +1,17 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, kioskOrRaceOperateProcedure, kioskOrRaceOperateRaceProcedure, raceOperateProcedure } from "../trpc.js";
-import { toAbsolute, toRelative } from "../timeConvert.js";
+import { router, kioskOrRaceOperateProcedure, raceOperateRaceProcedure, raceOperateProcedure } from "../trpc.js";
+import { toAbsolute, toRelative, toRelativeChecked, hasTime, eventTimeZone } from "../timeConvert.js";
+import { timeOfDayDs, runningTimeDs, RunnerStatus, finishLegOf } from "@oxygen/shared";
 import {
   runnerStatusToValue,
   valueToRunnerStatus,
+  runnerStatusValueSchema,
 } from "../statusConvert.js";
+import { absoluteTimeSchema } from "../timeConvert.js";
 import { performReadout } from "./cardReadout.js";
 import { appendJournal } from "../journalEmit.js";
+import { loadClassStandings } from "../classStandings.js";
 import type { ControlMatch } from "@oxygen/shared";
 
 /**
@@ -81,15 +85,14 @@ export const raceRouter = router({
 
   /**
    * Server clock — returned both as ms-since-epoch (`now`) and as
-   * deciseconds-since-midnight (`deciseconds`, in the event's local
-   * timezone) for stations that want one or the other.
+   * deciseconds since midnight in the event's own time zone
+   * (`deciseconds`), with that zone (`timeZone`). Stations poll it now and
+   * then and tick locally from the offset (`useEventClock`).
    */
-  serverTime: kioskOrRaceOperateProcedure.query(() => {
-    const d = new Date();
-    const deciseconds =
-      (d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds()) * 10 +
-      Math.floor(d.getMilliseconds() / 100);
-    return { now: d.getTime(), deciseconds };
+  serverTime: kioskOrRaceOperateProcedure.query(({ ctx }) => {
+    const now = Date.now();
+    const timeZone = eventTimeZone(ctx.event);
+    return { now, deciseconds: timeOfDayDs(now, timeZone), timeZone };
   }),
 
   /** Most-recent finishers, for the activity feed. */
@@ -105,7 +108,7 @@ export const raceRouter = router({
         where: {
           eventId: ctx.event.id,
           removed: false,
-          finishTime: { gt: 0 },
+          finishTime: { not: 0 },
         },
         orderBy: { updatedAt: "desc" },
         take: limit,
@@ -115,10 +118,7 @@ export const raceRouter = router({
       return finishers.map((r) => {
         const startAbs = toAbsolute(r.startTime, zeroTime);
         const finishAbs = toAbsolute(r.finishTime, zeroTime);
-        const runningTime =
-          startAbs > 0 && finishAbs > 0
-            ? Math.max(0, finishAbs - startAbs)
-            : 0;
+        const runningTime = runningTimeDs(startAbs, finishAbs);
         return {
           id: r.seq,
           runnerId: r.seq,
@@ -162,10 +162,8 @@ export const raceRouter = router({
       if (!r) return null;
 
       // Build split times. The matcher's `controls` array is already
-      // ordered by course position. We compute split + cum from the
-      // punch times; first split is from start.
-      let lastTime = r.timing.startTime;
-      let cum = 0;
+      // ordered by course position; `legs[i]` is the leg leading INTO
+      // position `i`, so `legs[controls.length]` is the finish leg.
       const splits: Array<{
         controlIndex: number;
         controlCode: number;
@@ -178,81 +176,44 @@ export const raceRouter = router({
       const legs = r.course?.legs ?? [];
       r.controls.forEach((m: ControlMatch, idx) => {
         if (m.positionMode === "skipped") return;
-        const status: "ok" | "missing" | "extra" = m.status;
-        const punchTime = m.punchTime;
-        const split = m.splitTime;
-        cum = m.cumTime;
         splits.push({
           controlIndex: idx,
           controlCode: m.controlCode,
-          splitTime: split,
-          cumTime: cum,
-          status,
-          punchTime,
-          // `legs[i]` is the leg leading INTO position `i`, matching
-          // the matcher's `controls` index ordering (finish included
-          // as the last entry). Falls back to 0 for unknown lengths.
+          splitTime: m.splitTime,
+          cumTime: m.cumTime,
+          status: m.status,
+          punchTime: m.punchTime,
           legLength: legs[idx] ?? 0,
         });
-        if (status === "ok" && punchTime > 0) lastTime = punchTime;
       });
+      // The finish leg (CRS-013), the same rule as the offline readout.
+      const finish = finishLegOf(
+        r.controls,
+        r.timing.startTime,
+        r.timing.finishTime,
+        legs,
+        r.course?.orderMode ?? "ordered",
+      );
 
-      // Position within class.
-      //
-      // The old implementation pulled every finished runner in the
-      // event into Node and sorted in JS — O(N) per receipt across
-      // the whole event, which is wasteful when the finish receipt
-      // only needs to know "how many same-class runners beat this
-      // running time?". Postgres can answer both halves of that
-      // question with a parameterised filtered count using the
-      // existing `(event_id, class_id, removed)` index path, so we
-      // push the computation down: one count for the rank, one for
-      // the total. Two trivial index-only counts beat a 5 000-row
-      // fetch + JS sort on every kiosk readout.
+      // Position within class, from the same standings step as the result
+      // list (adjusted times, shared places for ties, unplaced in no-timing
+      // classes). The runner's own row is taken from this readout, so rank
+      // and total agree before the result is saved (CRS-039).
       let position: { rank: number; total: number } | null = null;
-      if (
-        r.timing.status === 1 &&
-        r.timing.runningTime > 0 &&
-        runner.classId
-      ) {
-        const myRunningTime =
-          (r.timing.finishTime > 0 ? r.timing.finishTime : 0) -
-          (r.timing.startTime > 0 ? r.timing.startTime : 0);
-
-        if (myRunningTime > 0) {
-          // OK-status, valid-time peers in the same class.
-          const baseWhere = {
-            eventId: ctx.event.id,
-            removed: false,
-            classId: runner.classId,
-            status: valueToRunnerStatus(1),
-            finishTime: { gt: 0 },
-            startTime: { gt: 0 },
-          } as const;
-
-          const [strictlyFaster, total] = await Promise.all([
-            // Rank = strictly-faster peers + 1 (ties share a rank).
-            // `finishTime - startTime` isn't directly indexed; in the
-            // common case where `startTime` is the same across the
-            // class (mass start or per-class draw) the planner can
-            // still use the (event_id, class_id, removed) index and
-            // filter on the projection cheaply.
-            ctx.db.$queryRaw<Array<{ count: bigint }>>`
-              SELECT COUNT(*)::bigint AS count
-              FROM oxygen.runners
-              WHERE event_id = ${ctx.event.id}
-                AND class_id = ${runner.classId}::uuid
-                AND removed = false
-                AND status = 'ok'::oxygen.runner_status
-                AND finish_time > 0
-                AND start_time > 0
-                AND (finish_time - start_time) < ${myRunningTime}
-            `,
-            ctx.db.runner.count({ where: baseWhere }),
-          ]);
-
-          const rank = Number(strictlyFaster[0]?.count ?? 0n) + 1;
-          position = total > 0 ? { rank, total } : null;
+      if (r.timing.status === RunnerStatus.OK && r.timing.runningTime > 0 && runner.classId) {
+        const standings = await loadClassStandings(ctx.db, ctx.event, {
+          classId: runner.classId,
+          override: {
+            runnerId: runner.id,
+            status: r.timing.status,
+            startTime: r.timing.startTime,
+            finishTime: r.timing.finishTime,
+            runningTimeAdjustment: r.timing.runningTimeAdjustment,
+          },
+        });
+        const mine = standings.find((s) => s.runner.id === runner.id);
+        if (mine && mine.place > 0) {
+          position = { rank: mine.place, total: standings.filter((s) => s.place > 0).length };
         }
       }
 
@@ -289,6 +250,7 @@ export const raceRouter = router({
           status: r.timing.status,
         },
         controls: splits,
+        finish,
         course: r.course
           ? {
               id: r.course.id,
@@ -317,15 +279,23 @@ export const raceRouter = router({
    * running time, and status. Caller can pass either `id` or
    * `runnerId` (legacy field name; kept for compatibility).
    */
-  recordFinish: kioskOrRaceOperateRaceProcedure
+  recordFinish: raceOperateRaceProcedure
     .input(
       z
         .object({
           id: z.number().int().optional(),
           runnerId: z.number().int().optional(),
-          finishTimeAbsolute: z.number().int().optional(),
-          finishTime: z.number().int().optional(),
-          status: z.number().int().optional(),
+          // Absolute deciseconds since midnight (0 = clear the finish).
+          finishTimeAbsolute: absoluteTimeSchema.optional(),
+          finishTime: absoluteTimeSchema.optional(),
+          status: runnerStatusValueSchema.optional(),
+          /**
+           * Replace a finish the runner already has with a different time
+           * (WEB-53). Without it the call is refused with `FINISH_EXISTS`,
+           * so the Finish Station asks first, even when its cached runner
+           * row is stale.
+           */
+          allowOverwrite: z.boolean().optional().default(false),
         })
         .refine((x) => (x.id ?? x.runnerId) != null, {
           message: "id or runnerId required",
@@ -336,15 +306,26 @@ export const raceRouter = router({
       const finishAbs = input.finishTimeAbsolute ?? input.finishTime ?? 0;
       const r = await ctx.db.runner.findFirst({
         where: { eventId: ctx.event.id, seq, removed: false },
-        select: { id: true, cardNo: true },
+        select: { id: true, cardNo: true, finishTime: true },
       });
       if (!r) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Runner not found" });
       }
       const zeroTime = ctx.event.zeroTime;
-      const finishRel = finishAbs > 0 ? toRelative(finishAbs, zeroTime) : 0;
-      const data: Record<string, unknown> = { finishTime: finishRel };
-      if (input.status != null) data.status = valueToRunnerStatus(input.status);
+      const finishRel = finishAbs > 0 ? toRelativeChecked(finishAbs, zeroTime) : 0;
+      if (r.finishTime !== 0 && finishRel !== r.finishTime && !input.allowOverwrite) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `FINISH_EXISTS: the runner already has a finish (${toAbsolute(r.finishTime, zeroTime)})`,
+        });
+      }
+      // A finish keyed in here is "by hand": a later card read without a
+      // finish punch keeps it (SI-10).
+      const data: Record<string, unknown> = { finishTime: finishRel, finishManual: finishRel !== 0 };
+      if (input.status != null) {
+        data.status = valueToRunnerStatus(input.status);
+        data.statusManual = input.status !== 0;
+      }
       // Table write + journal entry commit or roll back together.
       await ctx.db.$transaction(async (tx) => {
         await tx.runner.update({ where: { id: r.id }, data });

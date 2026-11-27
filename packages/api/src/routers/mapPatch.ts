@@ -53,7 +53,7 @@ export const mapPatchRouter = router({
   promote: coursesEditProcedure
     .input(z.object({ label: z.string().trim().min(1).max(PROMOTE_LABEL_MAX) }))
     .mutation(({ ctx, input }): Promise<PromoteResult> => {
-      if (ctx.authEnabled && !ctx.user) throw new TRPCError({ code: "UNAUTHORIZED", message: "Sign in to save corrections to the club map" });
+      if (ctx.authEnabled && !ctx.user && !ctx.nodeForward) throw new TRPCError({ code: "UNAUTHORIZED", message: "Sign in to save corrections to the club map" });
       return promoteEventPatch(ctx.db, ctx.event.id, { label: input.label, userId: ctx.user?.id ?? null });
     }),
 

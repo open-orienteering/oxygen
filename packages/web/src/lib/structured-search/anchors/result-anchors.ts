@@ -191,7 +191,6 @@ export function createResultAnchors(
         { key: "dns", label: "DNS — Did Not Start" },
         { key: "dq", label: "DQ — Disqualified" },
         { key: "overtime", label: "OT — Over Max Time" },
-        { key: "cancel", label: "Cancelled (withdrawn)" },
         { key: "oc", label: "OC — Out of Competition" },
         { key: "nc", label: "NC — Not Competing" },
         { key: "not-started", label: "Not started" },

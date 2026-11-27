@@ -190,7 +190,7 @@ export const classRouter = router({
         allowQuickEntry: z.boolean().optional().default(false),
         firstStart: z.number().int().optional().default(0),
         startInterval: z.number().int().optional().default(0),
-        maxTime: z.number().int().optional().default(0),
+        maxTime: z.number().int().min(0).optional().default(0),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -302,7 +302,7 @@ export const classRouter = router({
         allowQuickEntry: z.boolean().optional(),
         firstStart: z.number().int().optional(),
         startInterval: z.number().int().optional(),
-        maxTime: z.number().int().optional(),
+        maxTime: z.number().int().min(0).optional(),
         noTiming: z.boolean().optional(),
         freeStart: z.boolean().optional(),
         classType: z.string().optional(),
@@ -334,10 +334,13 @@ export const classRouter = router({
       if (input.freeStart !== undefined) data.freeStart = input.freeStart;
       if (input.classType !== undefined) data.classType = input.classType;
       await ctx.db.$transaction(async (tx) => {
+        // Read inside the transaction: the guard compares with the row as it is now.
+        const before = await tx.class.findUniqueOrThrow({ where: { id: c.id }, select: { courseId: true } });
         await tx.class.update({ where: { id: c.id }, data });
         // The pool follows the course, the runners the pool (F6b): journaled
         // after the class so a peer holds the pool first.
-        const sync = input.courseId !== undefined ? await syncClassPool(tx, c.id) : null;
+        // Only a changed course re-syncs the pool (an unchanged one must not touch the runners, WEB-09).
+        const sync = input.courseId !== undefined && data.courseId !== before.courseId ? await syncClassPool(tx, c.id) : null;
         await emitClassUpserted(tx, ctx.event.id, c.id);
         if (sync) await emitRunnerVariants(tx, ctx.event.id, sync.runners);
       });
@@ -353,7 +356,7 @@ export const classRouter = router({
         classFee: z.number().int().optional(),
         firstStart: z.number().int().optional(),
         startInterval: z.number().int().optional(),
-        maxTime: z.number().int().optional(),
+        maxTime: z.number().int().min(0).optional(),
         freeStart: z.boolean().optional(),
         noTiming: z.boolean().optional(),
         allowQuickEntry: z.boolean().optional(),
@@ -362,7 +365,7 @@ export const classRouter = router({
     .mutation(async ({ ctx, input }) => {
       const rows = await ctx.db.class.findMany({
         where: { eventId: ctx.event.id, seq: { in: input.ids } },
-        select: { id: true },
+        select: { id: true, courseId: true },
       });
       const data: Record<string, unknown> = {};
       if (input.courseId !== undefined) {
@@ -382,12 +385,13 @@ export const classRouter = router({
       if (input.allowQuickEntry !== undefined)
         data.allowQuickEntry = input.allowQuickEntry;
       await ctx.db.$transaction(async (tx) => {
+        const before = new Map((await tx.class.findMany({ where: { id: { in: rows.map((r) => r.id) } }, select: { id: true, courseId: true } })).map((r) => [r.id, r.courseId]));
         await tx.class.updateMany({
           where: { id: { in: rows.map((r) => r.id) } },
           data,
         });
         for (const r of rows) {
-          const sync = input.courseId !== undefined ? await syncClassPool(tx, r.id) : null;
+          const sync = input.courseId !== undefined && data.courseId !== before.get(r.id) ? await syncClassPool(tx, r.id) : null;
           await emitClassUpserted(tx, ctx.event.id, r.id);
           if (sync) await emitRunnerVariants(tx, ctx.event.id, sync.runners);
         }

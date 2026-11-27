@@ -18,12 +18,31 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
   router,
-  publicProcedure,
   authedProcedure,
   adminProcedure,
   manageProcedure,
+  raceOperateProcedure,
+  assertNotNodeForward,
 } from "../trpc.js";
 import { getSetting, setSetting, prisma, sanitizeNameId, isReservedEventSlug } from "../db.js";
+import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
+import { getActiveLease } from "../sync/lease.js";
+import { lockEventLeaseAndSync } from "../event-locks.js";
+import { firstFreeEventSlug, yearOf } from "../event-slug.js";
+import {
+  asClassSnapshot,
+  asRunnerSnapshot,
+  clampInt32,
+  makeCardNoClaimer,
+  normalizeCardNo,
+  planClassSync,
+  planRunnerSync,
+  type ClassPlan,
+  type ExistingClass,
+  type ExistingRunner,
+  type RunnerCreate,
+  type RunnerPlan,
+} from "../eventor-merge.js";
 import { grantSystemGroup } from "../permissions.js";
 import {
   SYSTEM_GROUP_IDS,
@@ -42,6 +61,7 @@ import {
   fetchCompetitors,
   fetchCachedCompetitors,
   uploadResults,
+  EventorTimeoutError,
   uploadStartList,
   classCourseForUpload,
   type EventorEntry,
@@ -57,14 +77,16 @@ import {
 } from "../statusConvert.js";
 import {
   parsePunches,
+  mergePunchesInCardOrder,
   matchPunchesToCourse,
   computeClassPlacements,
   type ParsedPunch,
   RunnerStatus,
 } from "@oxygen/shared";
-import { toAbsolute } from "../timeConvert.js";
+import { toAbsolute, toRelativeWrapped, zeroTimeForResults, hasStartedByClock, eventNowDs } from "../timeConvert.js";
 import { resolveCourseExpectedPositions } from "./course.js";
 import { reconcileVariants } from "../variants.js";
+import { pickRunnerCard } from "../cardLink.js";
 import type {
   EventorEnvironment,
   RunnerStatusValue,
@@ -75,6 +97,38 @@ import {
 } from "../runner-directory-sync.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/** Interactive-transaction limits (as events.ts ingest): a sync/import is many writes. */
+const SYNC_TX_OPTIONS = { timeout: 60_000, maxWait: 10_000 } as const;
+/** `events.zero_time` default (09:00). */
+const DEFAULT_ZERO_TIME = 324000;
+const IMPORT_TX_OPTIONS = { timeout: 120_000, maxWait: 10_000 } as const;
+
+/**
+ * The cloud is the only writer of a leased-out event, and this sync is not
+ * journaled, so a venue would never see its writes (review API-08): any active
+ * lease refuses it, the holder's included. `pushResults` / `pushStartList`
+ * only read the event and stay available.
+ */
+async function refuseWhileCheckedOut(
+  db: PrismaClient | Prisma.TransactionClient,
+  eventId: bigint,
+): Promise<void> {
+  if (await getActiveLease(db, eventId)) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "EVENT_CHECKED_OUT: this event is checked out to a venue. Check it in before syncing from Eventor.",
+    });
+  }
+}
+
+function emptyResponse(what: string): TRPCError {
+  return new TRPCError({
+    code: "PRECONDITION_FAILED",
+    message: `EVENTOR_EMPTY_RESPONSE: Eventor returned an empty ${what} for an event that has runners here. Nothing was changed.`,
+  });
+}
 
 async function requireApiKey(
   env: EventorEnvironment = "prod",
@@ -107,58 +161,9 @@ function formatDate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-const INT32_MAX = 2_147_483_647;
-
-/** Clamp a number into signed-INT32 range; non-finite → 0. */
-function clampInt32(n: number): number {
-  if (!Number.isFinite(n)) return 0;
-  if (n > INT32_MAX) return INT32_MAX;
-  if (n < -INT32_MAX - 1) return -INT32_MAX - 1;
-  return n | 0;
-}
-
-/**
- * Normalize an Eventor card number for storage. The `runners` table uses
- * NULL — not 0 — for "no card" and enforces a partial unique index on
- * (event_id, card_no) WHERE removed = false, so writing 0 for a second
- * cardless runner would violate the constraint. Non-positive → null.
- */
-export function normalizeCardNo(
-  raw: number | null | undefined,
-): number | null {
-  const v = clampInt32(raw ?? 0);
-  return v > 0 ? v : null;
-}
-
-/**
- * Card-number claimer for one import/sync pass, guarding the partial
- * unique index on (event_id, card_no). The first owner to claim a card
- * keeps it; a later claim by a different owner gets `fallback` instead
- * (null for creates, the runner's current card for sync updates).
- * Eventor data does contain duplicate card numbers (shared/loaned
- * cards, data-entry mistakes), and one bad pair must not abort the
- * whole import.
- */
-export function makeCardNoClaimer(
-  existing: Iterable<{ ownerKey: string; cardNo: number | null }> = [],
-): (
-  raw: number | null | undefined,
-  ownerKey: string,
-  fallback?: number | null,
-) => number | null {
-  const ownerByCard = new Map<number, string>();
-  for (const e of existing) {
-    if (e.cardNo != null && e.cardNo > 0) ownerByCard.set(e.cardNo, e.ownerKey);
-  }
-  return (raw, ownerKey, fallback = null) => {
-    const v = normalizeCardNo(raw);
-    if (v === null) return null;
-    const owner = ownerByCard.get(v);
-    if (owner !== undefined && owner !== ownerKey) return fallback;
-    ownerByCard.set(v, ownerKey);
-    return v;
-  };
-}
+// Card-number helpers live with the merge rules (src/eventor-merge.ts); the
+// router re-exports them for its callers and tests.
+export { normalizeCardNo, makeCardNoClaimer };
 
 /** Per-cluster in-memory club-member cache (10 min TTL). */
 const MEMBER_CACHE_TTL_MS = 10 * 60_000;
@@ -206,29 +211,11 @@ async function syncClubDirectoryEntries(clubs: EventorClub[]): Promise<{
   return { added, updated };
 }
 
-// ── Runner upsert helpers ────────────────────────────────────────────────
+// ── Sync / import helpers ──────────────────────────────────────────────────
 
-interface RunnerImportContext {
-  eventId: bigint;
-  eventorEventId: number;
-  classByEventorId: Map<number, { id: string; eventorId: bigint | null }>;
-  clubNameByEventorId: Map<number, string>;
-}
+type Db = PrismaClient | Prisma.TransactionClient;
 
-function buildClubName(
-  ctx: RunnerImportContext,
-  eventorClubId: number,
-  fallbackName: string,
-): { clubName: string; eventorClubId: bigint | null } {
-  if (eventorClubId > 0) {
-    const name = ctx.clubNameByEventorId.get(eventorClubId) ?? fallbackName;
-    return { clubName: name, eventorClubId: BigInt(eventorClubId) };
-  }
-  return { clubName: fallbackName ?? "", eventorClubId: null };
-}
-
-async function deriveClassFees(eventId: bigint): Promise<void> {
-  const db = prisma();
+async function deriveClassFees(db: Db, eventId: bigint): Promise<void> {
   const runners = await db.runner.findMany({
     where: { eventId, removed: false, feeCents: { gt: 0 } },
     select: { classId: true, feeCents: true },
@@ -266,16 +253,9 @@ async function deriveClassFees(eventId: bigint): Promise<void> {
   }
 }
 
-async function syncClassesFromEventor(
-  eventId: bigint,
-  eventorClasses: Awaited<ReturnType<typeof fetchEventClasses>>,
-): Promise<{
-  added: number;
-  updated: number;
-  classByEventorId: Map<number, { id: string; eventorId: bigint | null }>;
-}> {
-  const db = prisma();
-  const existing = await db.class.findMany({
+/** The local classes a sync plans against (live ones, as before). */
+async function readClassesForSync(db: Db, eventId: bigint) {
+  return db.class.findMany({
     where: { eventId, removed: false },
     select: {
       id: true,
@@ -288,77 +268,88 @@ async function syncClassesFromEventor(
       highAge: true,
       noTiming: true,
       classType: true,
+      eventorSnapshot: true,
     },
   });
-  const byEventorId = new Map(
-    existing
-      .filter((c) => c.eventorId !== null)
-      .map((c) => [Number(c.eventorId!), c]),
-  );
-  const result = new Map<number, { id: string; eventorId: bigint | null }>();
+}
 
-  let maxSortIdx = Math.max(0, ...existing.map((c) => c.sortIndex));
-  let added = 0;
-  let updated = 0;
-  const lengthsByCourseId = new Map<string, Set<number>>();
+type ClassRow = Awaited<ReturnType<typeof readClassesForSync>>[number];
 
-  for (const ec of eventorClasses) {
-    const existingRow = byEventorId.get(ec.classId);
-    if (existingRow) {
-      if (existingRow.courseId && (ec.courseLengthM ?? 0) > 0) {
-        const lengths = lengthsByCourseId.get(existingRow.courseId) ?? new Set();
-        lengths.add(ec.courseLengthM!);
-        lengthsByCourseId.set(existingRow.courseId, lengths);
-      }
-      const needsUpdate =
-        existingRow.name !== ec.name ||
-        existingRow.sex !== (ec.sex || "") ||
-        existingRow.lowAge !== ec.lowAge ||
-        existingRow.highAge !== ec.highAge ||
-        existingRow.noTiming !== ec.noTiming ||
-        (ec.sequence > 0 && existingRow.sortIndex !== ec.sequence) ||
-        (ec.classType && existingRow.classType !== ec.classType);
-      if (needsUpdate) {
-        await db.class.update({
-          where: { id: existingRow.id },
-          data: {
-            name: ec.name,
-            sex: ec.sex || "",
-            lowAge: ec.lowAge,
-            highAge: ec.highAge,
-            noTiming: ec.noTiming,
-            ...(ec.sequence > 0 ? { sortIndex: ec.sequence } : {}),
-            ...(ec.classType ? { classType: ec.classType.substring(0, 81) } : {}),
-          },
-        });
-        updated++;
-      }
-      result.set(ec.classId, { id: existingRow.id, eventorId: BigInt(ec.classId) });
-    } else {
-      maxSortIdx += 10;
-      const created = await db.class.create({
-        data: {
-          eventId,
-          name: ec.name,
-          sortIndex: ec.sequence > 0 ? ec.sequence : maxSortIdx,
-          eventorId: BigInt(ec.classId),
-          sex: ec.sex || "",
-          lowAge: ec.lowAge,
-          highAge: ec.highAge,
-          classType: ec.classType.substring(0, 81),
-          noTiming: ec.noTiming,
-        },
-        select: { id: true },
-      });
-      result.set(ec.classId, { id: created.id, eventorId: BigInt(ec.classId) });
-      added++;
-    }
+function toExistingClasses(rows: ClassRow[]): ExistingClass[] {
+  return rows.map((c) => ({
+    id: c.id,
+    name: c.name,
+    eventorId: c.eventorId === null ? null : Number(c.eventorId),
+    sortIndex: c.sortIndex,
+    sex: c.sex,
+    lowAge: c.lowAge,
+    highAge: c.highAge,
+    noTiming: c.noTiming,
+    classType: c.classType,
+    snapshot: asClassSnapshot(c.eventorSnapshot),
+  }));
+}
+
+/**
+ * Write a class plan: new classes, the changed fields and snapshots, and
+ * Eventor's published course lengths. Returns Eventor class id → local id.
+ */
+async function applyClassPlan(
+  db: Db,
+  eventId: bigint,
+  plan: ClassPlan,
+  existing: ClassRow[],
+  eventorClasses: ReadonlyArray<{ classId: number; courseLengthM?: number }>,
+): Promise<Map<number, string>> {
+  const classIdByEventorId = new Map<number, string>();
+  for (const c of existing) {
+    if (c.eventorId !== null) classIdByEventorId.set(Number(c.eventorId), c.id);
+  }
+  for (const u of plan.updates) {
+    const d = u.data;
+    await db.class.update({
+      where: { id: u.id },
+      data: {
+        ...(d.name !== undefined ? { name: d.name } : {}),
+        ...(d.sex !== undefined ? { sex: d.sex } : {}),
+        ...(d.lowAge !== undefined ? { lowAge: d.lowAge } : {}),
+        ...(d.highAge !== undefined ? { highAge: d.highAge } : {}),
+        ...(d.noTiming !== undefined ? { noTiming: d.noTiming } : {}),
+        ...(d.sortIndex !== undefined ? { sortIndex: d.sortIndex } : {}),
+        ...(d.classType !== undefined ? { classType: d.classType } : {}),
+        ...(u.snapshot ? { eventorSnapshot: u.snapshot as Prisma.InputJsonValue } : {}),
+      },
+    });
+  }
+  for (const c of plan.creates) {
+    const created = await db.class.create({
+      data: {
+        eventId,
+        eventorId: BigInt(c.eventorId),
+        ...c.data,
+        eventorSnapshot: c.snapshot as Prisma.InputJsonValue,
+      },
+      select: { id: true },
+    });
+    classIdByEventorId.set(c.eventorId, created.id);
   }
 
   // Eventor's IOF start list is authoritative for the published class
   // course length. Only update a shared course when every assigned class
   // reported the same positive value; conflicting values indicate a bad
   // class-course assignment and must not be resolved by last-write-wins.
+  const courseOfClass = new Map(
+    existing.filter((c) => c.eventorId !== null).map((c) => [Number(c.eventorId), c.courseId]),
+  );
+  const lengthsByCourseId = new Map<string, Set<number>>();
+  for (const ec of eventorClasses) {
+    const courseId = courseOfClass.get(ec.classId);
+    if (courseId && (ec.courseLengthM ?? 0) > 0) {
+      const lengths = lengthsByCourseId.get(courseId) ?? new Set();
+      lengths.add(ec.courseLengthM!);
+      lengthsByCourseId.set(courseId, lengths);
+    }
+  }
   for (const [courseId, lengths] of lengthsByCourseId) {
     if (lengths.size !== 1) continue;
     await db.course.updateMany({
@@ -374,28 +365,271 @@ async function syncClassesFromEventor(
       data: { lengthM: [...lengths][0] },
     });
   }
+  return classIdByEventorId;
+}
 
-  return { added, updated, classByEventorId: result };
+/** Eventor runner rows are written in chunks: one statement per 500 runners. */
+const RUNNER_CHUNK = 500;
+
+async function createRunners(
+  db: Db,
+  args: {
+    eventId: bigint;
+    eventorEventId: number;
+    zeroTime: number;
+    classIdByEventorId: ReadonlyMap<number, string>;
+    creates: RunnerCreate[];
+  },
+): Promise<void> {
+  const rows: Prisma.RunnerCreateManyInput[] = args.creates.map((c) => ({
+    eventId: args.eventId,
+    classId: c.classEventorId !== null ? (args.classIdByEventorId.get(c.classEventorId) ?? null) : null,
+    clubName: c.clubName,
+    eventorClubId: c.eventorClubId !== null ? BigInt(c.eventorClubId) : null,
+    name: c.name,
+    cardNo: c.cardNo,
+    eventorPersonId: c.personId > 0 ? BigInt(c.personId) : null,
+    eventorEntryId: c.eventorEntryId !== null ? BigInt(c.eventorEntryId) : null,
+    entrySource: clampInt32(args.eventorEventId),
+    birthYear: c.birthYear,
+    sex: c.sex,
+    nationality: c.nationality,
+    entryDate: c.entryDate,
+    entryTime: c.entryTime,
+    // Eventor reports clock times; the columns hold ZeroTime-relative ones
+    // (review RES-02). A start number is never taken from a result (EVT-04).
+    startTime: toRelativeWrapped(c.startTime, args.zeroTime),
+    finishTime: toRelativeWrapped(c.finishTime, args.zeroTime),
+    status: c.status as Prisma.RunnerCreateManyInput["status"],
+    bib: c.bib,
+    feeCents: c.feeCents,
+    paidCents: c.paidCents,
+    taxableCents: c.taxableCents,
+    rank: c.rank,
+    eventorSnapshot: c.snapshot as Prisma.InputJsonValue,
+  }));
+  for (let i = 0; i < rows.length; i += RUNNER_CHUNK) {
+    await db.runner.createMany({ data: rows.slice(i, i + RUNNER_CHUNK) });
+  }
+}
+
+/** What an Eventor sync (or its preview) reports; the same shape for both. */
+export interface EventorSyncResult {
+  dryRun: boolean;
+  classes: { added: number; updated: number; keptLocal: number; detailsIncomplete: boolean };
+  clubs: { added: number; updated: number };
+  runners: RunnerPlan["counts"];
+  samples: { wouldCancel: string[]; heldBack: string[] };
+  /** Ids of the runners cancelled (or, in a preview, to be); the apply call sends them back. */
+  cancelIds: string[];
+}
+
+const SAMPLE_LIMIT = 20;
+
+interface SyncPlan {
+  classRows: ClassRow[];
+  classPlan: ClassPlan;
+  runnerPlan: RunnerPlan;
 }
 
 /**
- * Upsert clubs referenced by `entries` (and optionally `results`) into
- * the global club_directory and return a Map(eventorClubId → clubName)
- * for stamping onto runners.
- *
- * Fires logo fetches in the background — promise discarded so the
- * caller doesn't block on Eventor logo IO.
+ * Read the event's classes and runners and plan the sync against them. Pure
+ * reads, so a preview and the real run (inside its transaction) compute the
+ * same plan from the same code.
  */
-async function syncClubsFromEntries(
-  apiKey: string,
-  env: EventorEnvironment,
+async function planEventorSync(
+  db: Db,
+  args: {
+    eventId: bigint;
+    eventorEventId: number;
+    eventorClasses: Awaited<ReturnType<typeof fetchEventClasses>>;
+    entries: EventorEntry[];
+    results: EventorResult[];
+    clubNameByEventorId: ReadonlyMap<number, string>;
+  },
+): Promise<SyncPlan> {
+  const classRows = await readClassesForSync(db, args.eventId);
+  const classPlan = planClassSync({
+    existing: toExistingClasses(classRows),
+    eventor: args.eventorClasses,
+  });
+
+  const known = new Set<number>(args.eventorClasses.map((c) => c.classId));
+  const eventorIdByLocalId = new Map<string, number | null>();
+  for (const c of classRows) {
+    if (c.eventorId !== null) known.add(Number(c.eventorId));
+    eventorIdByLocalId.set(c.id, c.eventorId === null ? null : Number(c.eventorId));
+  }
+
+  const runners = await db.runner.findMany({
+    where: {
+      eventId: args.eventId,
+      OR: [{ eventorPersonId: { not: null } }, { eventorEntryId: { not: null } }],
+    },
+    select: {
+      id: true,
+      name: true,
+      cardNo: true,
+      cardId: true,
+      classId: true,
+      eventorClubId: true,
+      clubName: true,
+      birthYear: true,
+      sex: true,
+      nationality: true,
+      startTime: true,
+      finishTime: true,
+      status: true,
+      removed: true,
+      entrySource: true,
+      entryDate: true,
+      entryTime: true,
+      feeCents: true,
+      paidCents: true,
+      taxableCents: true,
+      rank: true,
+      eventorPersonId: true,
+      eventorEntryId: true,
+      eventorSnapshot: true,
+    },
+  });
+  const existing: ExistingRunner[] = runners.map((r) => ({
+    id: r.id,
+    eventorPersonId: r.eventorPersonId === null ? null : Number(r.eventorPersonId),
+    eventorEntryId: r.eventorEntryId === null ? null : Number(r.eventorEntryId),
+    removed: r.removed,
+    name: r.name,
+    cardNo: r.cardNo,
+    cardId: r.cardId,
+    classEventorId: r.classId ? (eventorIdByLocalId.get(r.classId) ?? null) : null,
+    // Only a live local class with no Eventor id; a removed class is not "local".
+    classLocalOnly: r.classId != null && eventorIdByLocalId.has(r.classId) && eventorIdByLocalId.get(r.classId) === null,
+    eventorClubId: r.eventorClubId === null ? null : Number(r.eventorClubId),
+    clubName: r.clubName,
+    birthYear: r.birthYear,
+    sex: r.sex,
+    nationality: r.nationality,
+    startTime: r.startTime,
+    finishTime: r.finishTime,
+    status: r.status,
+    entrySource: r.entrySource,
+    entryDate: r.entryDate,
+    entryTime: r.entryTime,
+    feeCents: r.feeCents,
+    paidCents: r.paidCents,
+    taxableCents: r.taxableCents,
+    rank: r.rank,
+    snapshot: asRunnerSnapshot(r.eventorSnapshot),
+  }));
+
+  // Card claims must respect every non-removed runner in the event —
+  // including locally-registered ones without an Eventor person id —
+  // or an update/create would trip the (event_id, card_no) unique index.
+  const withCards = await db.runner.findMany({
+    where: { eventId: args.eventId, removed: false, cardNo: { not: null } },
+    select: { id: true, cardNo: true },
+  });
+
+  const runnerPlan = planRunnerSync({
+    eventorEventId: args.eventorEventId,
+    existing,
+    cardOwners: withCards.map((r) => ({ ownerKey: r.id, cardNo: r.cardNo })),
+    entries: args.entries,
+    results: args.results,
+    knownClassEventorIds: known,
+    clubNameByEventorId: args.clubNameByEventorId,
+  });
+  return { classRows, classPlan, runnerPlan };
+}
+
+async function applyRunnerPlan(
+  db: Db,
+  args: {
+    eventId: bigint;
+    eventorEventId: number;
+    zeroTime: number;
+    plan: RunnerPlan;
+    classIdByEventorId: ReadonlyMap<number, string>;
+  },
+): Promise<void> {
+  const { plan, classIdByEventorId } = args;
+  for (const u of plan.updates) {
+    const d = u.data;
+    await db.runner.update({
+      where: { id: u.id },
+      data: {
+        ...(d.name !== undefined ? { name: d.name } : {}),
+        ...(d.eventorPersonId !== undefined ? { eventorPersonId: BigInt(d.eventorPersonId) } : {}),
+        ...(d.cardNo !== undefined ? { cardNo: d.cardNo } : {}),
+        ...(d.classEventorId !== undefined
+          ? { classId: classIdByEventorId.get(d.classEventorId) ?? undefined }
+          : {}),
+        ...(d.clubName !== undefined ? { clubName: d.clubName } : {}),
+        ...(d.eventorClubId !== undefined ? { eventorClubId: BigInt(d.eventorClubId) } : {}),
+        ...(d.birthYear !== undefined ? { birthYear: d.birthYear } : {}),
+        ...(d.sex !== undefined ? { sex: d.sex } : {}),
+        ...(d.nationality !== undefined ? { nationality: d.nationality } : {}),
+        ...(d.entrySource !== undefined ? { entrySource: d.entrySource } : {}),
+        ...(d.entryDate !== undefined ? { entryDate: d.entryDate } : {}),
+        ...(d.entryTime !== undefined ? { entryTime: d.entryTime } : {}),
+        ...(d.feeCents !== undefined ? { feeCents: d.feeCents } : {}),
+        ...(d.paidCents !== undefined ? { paidCents: d.paidCents } : {}),
+        ...(d.taxableCents !== undefined ? { taxableCents: d.taxableCents } : {}),
+        ...(d.rank !== undefined ? { rank: d.rank } : {}),
+        ...(d.status !== undefined ? { status: d.status as Prisma.RunnerUpdateInput["status"] } : {}),
+        ...(u.snapshot ? { eventorSnapshot: u.snapshot as Prisma.InputJsonValue } : {}),
+      },
+    });
+  }
+  for (const r of plan.cancels) {
+    await db.runner.update({
+      where: { id: r.id },
+      data: { status: "cancel", eventorSnapshot: r.snapshot as Prisma.InputJsonValue },
+    });
+  }
+  for (const r of plan.heldBack) {
+    await db.runner.update({
+      where: { id: r.id },
+      data: { eventorSnapshot: r.snapshot as Prisma.InputJsonValue },
+    });
+  }
+  await createRunners(db, {
+    eventId: args.eventId,
+    eventorEventId: args.eventorEventId,
+    zeroTime: args.zeroTime,
+    classIdByEventorId,
+    creates: plan.creates,
+  });
+}
+
+function syncResult(
+  dryRun: boolean,
+  plan: SyncPlan,
+  clubs: { added: number; updated: number },
+): EventorSyncResult {
+  return {
+    dryRun,
+    classes: {
+      added: plan.classPlan.creates.length,
+      updated: plan.classPlan.updates.filter((u) => Object.keys(u.data).length > 0).length,
+      keptLocal: plan.classPlan.keptLocal,
+      detailsIncomplete: plan.classPlan.detailsIncomplete,
+    },
+    clubs,
+    runners: plan.runnerPlan.counts,
+    samples: {
+      wouldCancel: plan.runnerPlan.cancels.slice(0, SAMPLE_LIMIT).map((r) => r.name),
+      heldBack: plan.runnerPlan.heldBack.slice(0, SAMPLE_LIMIT).map((r) => r.name),
+    },
+    cancelIds: plan.runnerPlan.cancels.map((r) => r.id),
+  };
+}
+
+/** The clubs the entries and results mention, by Eventor id (no I/O). */
+function collectClubs(
   entries: EventorEntry[],
   results: EventorResult[] = [],
-): Promise<{
-  added: number;
-  updated: number;
-  clubNameByEventorId: Map<number, string>;
-}> {
+): Map<number, EventorClub> {
   // Build the set of clubs we've seen in entries / results.
   const seen = new Map<number, EventorClub>();
   for (const e of entries) {
@@ -432,6 +666,47 @@ async function syncClubsFromEntries(
       });
     }
   }
+  return seen;
+}
+
+function namesOf(clubs: ReadonlyMap<number, EventorClub>): Map<number, string> {
+  return new Map([...clubs].map(([id, c]) => [id, c.name]));
+}
+
+/** How many of `clubs` the global directory has (updated) and lacks (added); reads only. */
+async function countClubChanges(
+  db: Db,
+  clubs: EventorClub[],
+): Promise<{ added: number; updated: number }> {
+  const valid = new Set(clubs.filter((c) => c.id && c.name).map((c) => c.id));
+  if (valid.size === 0) return { added: 0, updated: 0 };
+  const have = await db.clubDirectory.findMany({
+    where: { eventorId: { in: [...valid].map((id) => BigInt(id)) } },
+    select: { eventorId: true },
+  });
+  const updated = have.length;
+  return { added: valid.size - updated, updated };
+}
+
+/**
+ * Upsert clubs referenced by `entries` (and optionally `results`) into
+ * the global club_directory and return a Map(eventorClubId → clubName)
+ * for stamping onto runners.
+ *
+ * Fires logo fetches in the background — promise discarded so the
+ * caller doesn't block on Eventor logo IO.
+ */
+async function syncClubsFromEntries(
+  apiKey: string,
+  env: EventorEnvironment,
+  entries: EventorEntry[],
+  results: EventorResult[] = [],
+): Promise<{
+  added: number;
+  updated: number;
+  clubNameByEventorId: Map<number, string>;
+}> {
+  const seen = collectClubs(entries, results);
 
   // Enrich with full address info via fetchReferencedClubs (best-effort).
   try {
@@ -491,6 +766,162 @@ async function syncClubsFromEntries(
 }
 
 // ── Router ─────────────────────────────────────────────────────────────────
+
+/**
+ * The runner-directory sync is a ~9 MB Eventor download plus a bulk upsert;
+ * one run at a time per process (a second caller gets CONFLICT).
+ */
+let runnerDbSyncRunning = false;
+
+async function syncRunnerDbOnce(input: { env: "prod" | "test" }) {
+  const { apiKey } = await requireApiKey(input.env);
+  const db = prisma();
+
+  // 1. Competitors
+  const competitors = await fetchCachedCompetitors(apiKey, input.env);
+
+  // 2. Aggregate the clubs referenced by competitors.
+  const clubMap = new Map<number, string>();
+  for (const c of competitors) {
+    if (c.clubEventorId > 0 && c.clubName) {
+      clubMap.set(c.clubEventorId, c.clubName);
+    }
+  }
+
+  // 3. Upsert competitor-referenced clubs first (name only).
+  const partialClubs: EventorClub[] = [...clubMap.entries()].map(
+    ([id, name]) => ({
+      id,
+      name,
+      shortName: "",
+      countryCode: "",
+      careOf: "",
+      street: "",
+      city: "",
+      zip: "",
+      email: "",
+      phone: "",
+      webUrl: "",
+    }),
+  );
+  await syncClubDirectoryEntries(partialClubs);
+
+  // 4. Try to enrich with full club details (name + short + country).
+  try {
+    const allClubs = await fetchClubs(apiKey, input.env);
+    await syncClubDirectoryEntries(allClubs);
+  } catch (err) {
+    console.warn("[syncRunnerDb] full club fetch failed:", err);
+  }
+
+  // 5. Upsert runner directory with one SQL statement per 1,000 rows.
+  //    Keep the global table in place so readers never see it empty.
+  const valid = [
+    ...new Map(
+      competitors
+        .filter((c) => c.extId > 0)
+        .map((c) => [c.extId, c] as const),
+    ).values(),
+  ];
+  await upsertRunnerDirectoryEntries(
+    db,
+    valid.map((c) => ({
+      eventorPersonId: BigInt(c.extId),
+      name: c.name,
+      cardNo: clampInt32(c.cardNo),
+      eventorClubId: clampInt32(c.clubEventorId),
+      birthYear: c.birthYear,
+      sex: c.sex,
+      nationality: c.nationality,
+    })),
+  );
+
+  // 6. Background logo fetch for clubs that still lack a small logo.
+  void (async () => {
+    try {
+      const needsLogo = await db.clubDirectory.findMany({
+        where: {
+          eventorId: { in: [...clubMap.keys()].map((id) => BigInt(id)) },
+          smallLogoPng: null,
+        },
+        select: { eventorId: true },
+        take: 200,
+      });
+      for (const c of needsLogo) {
+        try {
+          const small = await fetchClubLogo(
+            Number(c.eventorId),
+            apiKey,
+            "SmallIcon",
+          );
+          const large = await fetchClubLogo(
+            Number(c.eventorId),
+            apiKey,
+            "LargeIcon",
+          );
+          if (small) {
+            await db.clubDirectory.update({
+              where: { eventorId: c.eventorId },
+              data: {
+                smallLogoPng: Buffer.from(small),
+                ...(large ? { largeLogoPng: Buffer.from(large) } : {}),
+                updatedAt: new Date(),
+              },
+            });
+          }
+        } catch {
+          // skip individual failures
+        }
+      }
+    } catch {
+      // non-critical
+    }
+  })();
+
+  // 7. Record sync state in settings.
+  await Promise.all([
+    setSetting("runnerdb_last_sync", new Date().toISOString()),
+    setSetting("runnerdb_runner_count", String(valid.length)),
+    setSetting("runnerdb_club_count", String(clubMap.size)),
+  ]);
+
+  return {
+    runners: valid.length,
+    clubs: clubMap.size,
+    logosAdded: 0, // background — count not available synchronously
+  };
+}
+
+// ─── Upload guard and timeout mapping (EVT-13) ──────────────
+
+/** Uploads running in this process, keyed `${eventId}:results|startlist`. */
+const pushesInFlight = new Set<string>();
+
+/**
+ * One upload per event and kind at a time. A second click while the first
+ * waits on a slow Eventor would otherwise post the same XML twice. Per
+ * process only (one API instance serves an event's operator).
+ */
+export async function withPushGuard<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  if (pushesInFlight.has(key)) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message:
+        "EVENTOR_PUSH_IN_PROGRESS: an upload to Eventor is already running for this event. Wait for it to finish.",
+    });
+  }
+  pushesInFlight.add(key);
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof EventorTimeoutError) {
+      throw new TRPCError({ code: "TIMEOUT", message: err.message, cause: err });
+    }
+    throw err;
+  } finally {
+    pushesInFlight.delete(key);
+  }
+}
 
 export const eventorRouter = router({
   // ───────────── Key management ─────────────
@@ -580,7 +1011,7 @@ export const eventorRouter = router({
 
   // ───────────── Browse events ─────────────
 
-  events: publicProcedure
+  events: authedProcedure
     .input(
       z
         .object({
@@ -602,7 +1033,7 @@ export const eventorRouter = router({
       return fetchEvents(apiKey, org.id, fromDate, toDate, input?.env);
     }),
 
-  searchEvents: publicProcedure
+  searchEvents: authedProcedure
     .input(
       z.object({
         query: z.string(),
@@ -628,7 +1059,7 @@ export const eventorRouter = router({
       return events.filter((e) => e.name.toLowerCase().includes(q));
     }),
 
-  eventDetail: publicProcedure
+  eventDetail: authedProcedure
     .input(
       z.object({
         eventId: z.number().int().positive(),
@@ -660,6 +1091,10 @@ export const eventorRouter = router({
    * Create a new Event row from an Eventor event and populate its
    * classes + runners. Public because it's invoked from the event
    * selector before any event is open.
+   *
+   * All or nothing: the slug is settled before any Eventor request, and the
+   * event, its classes and every runner are written in one transaction, so a
+   * failure half way leaves no event behind (review MC-13, EVT-09).
    */
   importEvent: authedProcedure
     .input(
@@ -674,77 +1109,50 @@ export const eventorRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      assertNotNodeForward(ctx);
       const { apiKey } = await requireApiKey(input.env);
       const db = prisma();
 
-      // 1. Fetch from Eventor in parallel.
+      // 1. The slug and the duplicate check, before anything is fetched.
+      const baseSlug = sanitizeNameId(input.eventName);
+      if (isReservedEventSlug(baseSlug)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Slug "${baseSlug}" is reserved.`,
+        });
+      }
+      const already = await db.event.findFirst({
+        where: { eventorEventId: BigInt(input.eventId), eventorEnv: input.env, removed: false },
+        select: { nameId: true },
+      });
+      if (already) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `This Eventor event is already imported as "${already.nameId}".`,
+        });
+      }
+      // A name that a soft-deleted event still holds is taken too (the slug
+      // is unique over deleted rows): the year, then the Eventor id.
+      const year = yearOf(input.eventDate);
+      const nameId = await firstFreeEventSlug(db, baseSlug, [
+        ...(year ? [year] : []),
+        String(input.eventId),
+      ]);
+      if (!nameId) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `An event with slug "${baseSlug}" already exists.`,
+        });
+      }
+
+      // 2. Fetch from Eventor in parallel.
       const [classes, entries, results] = await Promise.all([
         fetchEventClasses(apiKey, input.eventId, input.env),
         fetchEntries(apiKey, input.eventId, input.env),
         fetchResults(apiKey, input.eventId, input.env),
       ]);
 
-      // 2. Create the event row.
-      const nameId = sanitizeNameId(input.eventName);
-      if (isReservedEventSlug(nameId)) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Slug "${nameId}" is reserved.`,
-        });
-      }
-      const event = await db.$transaction(async (tx) => {
-        const created = await tx.event.create({
-          data: {
-            nameId,
-            name: input.eventName,
-            date: new Date(input.eventDate),
-            kind: eventKindFromClassification(input.classificationId),
-            eventorEventId: BigInt(input.eventId),
-            eventorEnv: input.env,
-            eventorLastSync: new Date(),
-            organizerName: input.organiserName ?? "",
-            organizerEventorId: input.organiserId ?? 0,
-          },
-          select: { id: true, nameId: true },
-        });
-        await tx.eventorEventMeta.upsert({
-          where: { eventorEventId: input.eventId },
-          create: {
-            eventorEventId: input.eventId,
-            name: input.eventName,
-            startDate: new Date(input.eventDate),
-            classificationId: input.classificationId,
-            organiser: input.organiserName ?? "",
-            entryCount: entries.length,
-            fetchedAt: new Date(),
-          },
-          update: {
-            name: input.eventName,
-            startDate: new Date(input.eventDate),
-            classificationId: input.classificationId,
-            organiser: input.organiserName ?? "",
-            entryCount: entries.length,
-            fetchedAt: new Date(),
-          },
-        });
-        return created;
-      });
-      if (ctx.user) {
-        await grantSystemGroup(db, {
-          eventId: event.id,
-          userId: ctx.user.id,
-          groupId: SYSTEM_GROUP_IDS.eventAdmin,
-          grantedBy: ctx.user.id,
-        });
-      }
-
-      // 3. Upsert classes.
-      const { classByEventorId } = await syncClassesFromEventor(
-        event.id,
-        classes,
-      );
-
-      // 4. Sync clubs (writes to clubDirectory + returns name lookup).
+      // 3. Clubs go to the global directory (idempotent), outside the event's transaction.
       const { clubNameByEventorId } = await syncClubsFromEntries(
         apiKey,
         input.env,
@@ -752,116 +1160,90 @@ export const eventorRouter = router({
         results,
       );
 
-      // 5. Build a personId → result map for fast joins.
-      const resultsByPersonId = new Map<number, EventorResult>();
-      for (const r of results) {
-        if (r.personId > 0) resultsByPersonId.set(r.personId, r);
-      }
+      const classPlan = planClassSync({ existing: [], eventor: classes });
+      const runnerPlan = planRunnerSync({
+        firstImport: true,
+        eventorEventId: input.eventId,
+        existing: [],
+        cardOwners: [],
+        entries,
+        results,
+        knownClassEventorIds: new Set(classes.map((c) => c.classId)),
+        clubNameByEventorId,
+      });
 
-      // 6. Import runners from entries (then results-only late entries).
-      const seenPersonIds = new Set<number>();
-      const claimCardNo = makeCardNoClaimer();
-      let runnerCount = 0;
-
-      for (const entry of entries) {
-        const cls = classByEventorId.get(entry.classId);
-        const result = resultsByPersonId.get(entry.personId);
-        const club = buildClubName(
-          {
-            eventId: event.id,
+      // 4. The event, its classes and all runners, in one transaction.
+      const event = await db.$transaction(
+        async (tx) => {
+          const created = await tx.event.create({
+            data: {
+              nameId,
+              name: input.eventName,
+              date: new Date(input.eventDate),
+              kind: eventKindFromClassification(input.classificationId),
+              eventorEventId: BigInt(input.eventId),
+              eventorEnv: input.env,
+              organizerName: input.organiserName ?? "",
+              organizerEventorId: input.organiserId ?? 0,
+              // A run event's start times set its ZeroTime (an hour before the
+              // earliest), so none lands on or before it (review RES-02).
+              zeroTime: zeroTimeForResults(results.map((r) => r.startTime), DEFAULT_ZERO_TIME),
+            },
+            select: { id: true, nameId: true, zeroTime: true },
+          });
+          await tx.eventorEventMeta.upsert({
+            where: { eventorEventId: input.eventId },
+            create: {
+              eventorEventId: input.eventId,
+              name: input.eventName,
+              startDate: new Date(input.eventDate),
+              classificationId: input.classificationId,
+              organiser: input.organiserName ?? "",
+              entryCount: entries.length,
+              fetchedAt: new Date(),
+            },
+            update: {
+              name: input.eventName,
+              startDate: new Date(input.eventDate),
+              classificationId: input.classificationId,
+              organiser: input.organiserName ?? "",
+              entryCount: entries.length,
+              fetchedAt: new Date(),
+            },
+          });
+          if (ctx.user) {
+            await grantSystemGroup(tx, {
+              eventId: created.id,
+              userId: ctx.user.id,
+              groupId: SYSTEM_GROUP_IDS.eventAdmin,
+              grantedBy: ctx.user.id,
+            });
+          }
+          const classIdByEventorId = await applyClassPlan(tx, created.id, classPlan, [], classes);
+          await createRunners(tx, {
+            eventId: created.id,
             eventorEventId: input.eventId,
-            classByEventorId,
-            clubNameByEventorId,
-          },
-          entry.organisationId,
-          entry.organisationName,
-        );
-        const runnerStatus: RunnerStatusValue = (result?.status as RunnerStatusValue) ??
-          ((entry.noTiming
-            ? RunnerStatus.NoTiming
-            : RunnerStatus.Unknown) as RunnerStatusValue);
-        await db.runner.create({
-          data: {
-            eventId: event.id,
-            classId: cls?.id ?? null,
-            clubName: club.clubName,
-            eventorClubId: club.eventorClubId,
-            name: entry.personName,
-            cardNo: claimCardNo(
-              result?.cardNo || entry.cardNo,
-              `person:${entry.personId}`,
-            ),
-            eventorPersonId: BigInt(entry.personId),
-            eventorEntryId:
-              entry.eventorEntryId > 0 ? BigInt(entry.eventorEntryId) : null,
-            entrySource: clampInt32(input.eventId),
-            birthYear: entry.birthYear,
-            sex: entry.sex,
-            nationality: (result?.nationality || entry.nationality).substring(0, 7),
-            entryDate: entry.entryDate,
-            entryTime: entry.entryTime,
-            startTime: result?.startTime ?? 0,
-            finishTime: result?.finishTime ?? 0,
-            status: valueToRunnerStatus(runnerStatus),
-            startNo: result?.startNo ?? 0,
-            bib: (result?.bib ?? "").substring(0, 17),
-            feeCents: clampInt32(entry.fee),
-            paidCents: clampInt32(entry.paid),
-            taxableCents: clampInt32(entry.taxable),
-            rank: Math.round(entry.rankingScore),
-          },
-        });
-        seenPersonIds.add(entry.personId);
-        runnerCount++;
-      }
-
-      // Results-only (e.g. day-of late entries that bypassed Entry).
-      for (const result of results) {
-        if (result.personId <= 0 || seenPersonIds.has(result.personId)) continue;
-        const cls = classByEventorId.get(result.classId);
-        const club = buildClubName(
-          {
-            eventId: event.id,
-            eventorEventId: input.eventId,
-            classByEventorId,
-            clubNameByEventorId,
-          },
-          result.organisationId,
-          result.organisationName,
-        );
-        await db.runner.create({
-          data: {
-            eventId: event.id,
-            classId: cls?.id ?? null,
-            clubName: club.clubName,
-            eventorClubId: club.eventorClubId,
-            name: result.personName,
-            cardNo: claimCardNo(result.cardNo, `person:${result.personId}`),
-            eventorPersonId: BigInt(result.personId),
-            entrySource: clampInt32(input.eventId),
-            birthYear: result.birthYear,
-            sex: result.sex,
-            nationality: (result.nationality ?? "").substring(0, 7),
-            startTime: result.startTime,
-            finishTime: result.finishTime,
-            status: valueToRunnerStatus(result.status as RunnerStatusValue),
-            startNo: result.startNo,
-            bib: (result.bib ?? "").substring(0, 17),
-          },
-        });
-        seenPersonIds.add(result.personId);
-        runnerCount++;
-      }
-
-      // 7. Derive class fees from the mode entry fee per class.
-      await deriveClassFees(event.id);
+            zeroTime: created.zeroTime,
+            classIdByEventorId,
+            creates: runnerPlan.creates,
+          });
+          // Derive class fees from the mode entry fee per class.
+          await deriveClassFees(tx, created.id);
+          await tx.event.update({
+            where: { id: created.id },
+            data: { eventorLastSync: new Date() },
+          });
+          return created;
+        },
+        IMPORT_TX_OPTIONS,
+      );
 
       return {
         nameId: event.nameId,
         eventId: Number(event.id),
         classCount: classes.length,
         clubCount: clubNameByEventorId.size,
-        runnerCount,
+        runnerCount: runnerPlan.creates.length,
       };
     }),
 
@@ -900,316 +1282,155 @@ export const eventorRouter = router({
     };
   }),
 
-  /** Incremental sync — classes + clubs + runners from Eventor. */
-  sync: manageProcedure.mutation(async ({ ctx }) => {
-    const db = ctx.db;
-    const event = await db.event.findUnique({
-      where: { id: ctx.event.id },
-      select: { eventorEventId: true, eventorEnv: true },
-    });
-    if (!event?.eventorEventId) {
-      throw new TRPCError({
-        code: "PRECONDITION_FAILED",
-        message: "This event is not linked to an Eventor event.",
+  /**
+   * Incremental sync — classes + clubs + runners from Eventor.
+   *
+   * Never undoes what the desk did (docs/system/eventor-sync.md): an Eventor
+   * value is applied only when Eventor changed it since the last sync and the
+   * local value is still the one that sync stored; times, status and start
+   * numbers are never touched; a runner missing from Eventor is cancelled only
+   * when nothing has happened to her locally. `dryRun` returns the same counts
+   * without writing anything. Refused while the event is checked out to a
+   * venue: the cloud is then not the writer and the sync is not journaled.
+   */
+  sync: manageProcedure
+    .input(
+      z
+        .object({
+          dryRun: z.boolean().default(false),
+          /**
+           * The runners the operator saw in the preview as "will be marked as
+           * withdrawn". The apply may cancel fewer, never one that is not in
+           * this list (EVENTOR_PREVIEW_CHANGED).
+           */
+          confirmCancelIds: z.array(z.string()).optional(),
+        })
+        .default({ dryRun: false }),
+    )
+    .mutation(async ({ ctx, input }): Promise<EventorSyncResult> => {
+      const db = ctx.db;
+      // An apply is always bound to a preview (an old client without the field
+      // would otherwise apply blind).
+      if (!input.dryRun && input.confirmCancelIds === undefined) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "EVENTOR_PREVIEW_REQUIRED: Preview the sync first, then apply it.",
+        });
+      }
+      await refuseWhileCheckedOut(db, ctx.event.id);
+      const event = await db.event.findUnique({
+        where: { id: ctx.event.id },
+        select: { eventorEventId: true, eventorEnv: true },
       });
-    }
-    const env = (event.eventorEnv as EventorEnvironment) ?? "prod";
-    const { apiKey } = await requireApiKey(env);
-    const eventorEventId = Number(event.eventorEventId);
+      if (!event?.eventorEventId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "This event is not linked to an Eventor event.",
+        });
+      }
+      const env = (event.eventorEnv as EventorEnvironment) ?? "prod";
+      const { apiKey } = await requireApiKey(env);
+      const eventorEventId = Number(event.eventorEventId);
 
-    const stats = {
-      classesAdded: 0,
-      classesUpdated: 0,
-      clubsAdded: 0,
-      clubsUpdated: 0,
-      runnersAdded: 0,
-      runnersUpdated: 0,
-      /**
-       * Runners that exist locally but Eventor no longer reports — we
-       * flip them to `cancel` so the start list reflects withdrawals
-       * without dropping the row (keeps audit history intact).
-       */
-      cancelledCount: 0,
-    };
+      // 1. Everything from Eventor first: a failure here aborts before any write.
+      const [eventorClasses, entries, results] = await Promise.all([
+        fetchEventClasses(apiKey, eventorEventId, env),
+        fetchEntries(apiKey, eventorEventId, env),
+        fetchResults(apiKey, eventorEventId, env),
+      ]);
 
-    // 1. Classes
-    const eventorClasses = await fetchEventClasses(apiKey, eventorEventId, env);
-    const classSync = await syncClassesFromEventor(ctx.event.id, eventorClasses);
-    stats.classesAdded = classSync.added;
-    stats.classesUpdated = classSync.updated;
-    const classByEventorId = classSync.classByEventorId;
-
-    // 2. Entries + results in parallel
-    const [entries, results] = await Promise.all([
-      fetchEntries(apiKey, eventorEventId, env),
-      fetchResults(apiKey, eventorEventId, env),
-    ]);
-
-    // 3. Clubs (global)
-    const clubSync = await syncClubsFromEntries(apiKey, env, entries, results);
-    stats.clubsAdded = clubSync.added;
-    stats.clubsUpdated = clubSync.updated;
-
-    const resultsByPersonId = new Map<number, EventorResult>();
-    for (const r of results) {
-      if (r.personId > 0) resultsByPersonId.set(r.personId, r);
-    }
-
-    // 4. Existing runners, indexed by Eventor person id
-    const existing = await db.runner.findMany({
-      where: {
-        eventId: ctx.event.id,
-        eventorPersonId: { not: null },
-      },
-      select: {
-        id: true,
-        name: true,
-        cardNo: true,
-        classId: true,
-        eventorClubId: true,
-        clubName: true,
-        birthYear: true,
-        sex: true,
-        nationality: true,
-        startTime: true,
-        finishTime: true,
-        status: true,
-        entrySource: true,
-        feeCents: true,
-        paidCents: true,
-        taxableCents: true,
-        rank: true,
-        eventorPersonId: true,
-      },
-    });
-    const byPersonId = new Map(
-      existing.map((r) => [Number(r.eventorPersonId), r]),
-    );
-
-    // Card claims must respect every non-removed runner in the event —
-    // including locally-registered ones without an Eventor person id —
-    // or an update/create would trip the (event_id, card_no) unique index.
-    const runnersWithCards = await db.runner.findMany({
-      where: { eventId: ctx.event.id, removed: false, cardNo: { not: null } },
-      select: { id: true, cardNo: true },
-    });
-    const claimCardNo = makeCardNoClaimer(
-      runnersWithCards.map((r) => ({ ownerKey: r.id, cardNo: r.cardNo })),
-    );
-
-    const seen = new Set<number>();
-
-    for (const entry of entries) {
-      const cls = classByEventorId.get(entry.classId);
-      const result = resultsByPersonId.get(entry.personId);
-      const club = buildClubName(
-        {
-          eventId: ctx.event.id,
-          eventorEventId,
-          classByEventorId,
-          clubNameByEventorId: clubSync.clubNameByEventorId,
-        },
-        entry.organisationId,
-        entry.organisationName,
-      );
-      const found = byPersonId.get(entry.personId);
-      if (found) {
-        // Cancel→re-entered: reset status to default if we previously
-        // stamped them Cancel (21) and there's no result yet.
-        const isReinstating =
-          found.status === valueToRunnerStatus(21 as RunnerStatusValue) &&
-          !result;
-        const reinstatedStatus: RunnerStatusValue = (
-          entry.noTiming ? RunnerStatus.NoTiming : RunnerStatus.Unknown
-        ) as RunnerStatusValue;
-
-        // On a card conflict keep the runner's current card rather than
-        // stealing it from (or being stolen by) another runner.
-        const nextCardNo = claimCardNo(
-          result?.cardNo || entry.cardNo,
-          found.id,
-          found.cardNo,
-        );
-
-        const needsUpdate =
-          found.name !== entry.personName ||
-          found.cardNo !== nextCardNo ||
-          found.classId !== (cls?.id ?? null) ||
-          (found.eventorClubId
-            ? Number(found.eventorClubId) !== entry.organisationId
-            : entry.organisationId > 0) ||
-          found.birthYear !== entry.birthYear ||
-          found.sex !== entry.sex ||
-          (!!entry.nationality && found.nationality !== entry.nationality) ||
-          (result && found.startTime !== result.startTime) ||
-          (result && found.finishTime !== result.finishTime) ||
-          (result &&
-            found.status !==
-              valueToRunnerStatus(result.status as RunnerStatusValue)) ||
-          isReinstating;
-        if (needsUpdate) {
-          await db.runner.update({
-            where: { id: found.id },
-            data: {
-              name: entry.personName,
-              cardNo: nextCardNo,
-              classId: cls?.id ?? null,
-              clubName: club.clubName,
-              eventorClubId: club.eventorClubId,
-              birthYear: entry.birthYear,
-              sex: entry.sex,
-              ...(found.entrySource === 0
-                ? { entrySource: clampInt32(eventorEventId) }
-                : {}),
-              ...(entry.nationality
-                ? { nationality: entry.nationality.substring(0, 7) }
-                : {}),
-              ...(entry.entryDate ? { entryDate: entry.entryDate } : {}),
-              ...(entry.entryTime ? { entryTime: entry.entryTime } : {}),
-              ...(found.feeCents === 0 && entry.fee > 0
-                ? { feeCents: clampInt32(entry.fee) }
-                : {}),
-              ...(found.paidCents === 0 && entry.paid > 0
-                ? { paidCents: clampInt32(entry.paid) }
-                : {}),
-              ...(found.taxableCents === 0 && entry.taxable > 0
-                ? { taxableCents: clampInt32(entry.taxable) }
-                : {}),
-              ...(found.rank === 0 && entry.rankingScore > 0
-                ? { rank: Math.round(entry.rankingScore) }
-                : {}),
-              ...(result
-                ? {
-                    startTime: result.startTime,
-                    finishTime: result.finishTime,
-                    status: valueToRunnerStatus(
-                      result.status as RunnerStatusValue,
-                    ),
-                    ...(result.startNo > 0 ? { startNo: result.startNo } : {}),
-                    ...(result.bib
-                      ? { bib: result.bib.substring(0, 17) }
-                      : {}),
-                  }
-                : isReinstating
-                  ? {
-                      status: valueToRunnerStatus(reinstatedStatus),
-                    }
-                  : {}),
-            },
-          });
-          stats.runnersUpdated++;
-        }
-      } else {
-        const runnerStatus: RunnerStatusValue =
-          (result?.status as RunnerStatusValue) ??
-          ((entry.noTiming
-            ? RunnerStatus.NoTiming
-            : RunnerStatus.Unknown) as RunnerStatusValue);
-        await db.runner.create({
-          data: {
+      // 2. An empty answer is an odd response, not "everyone withdrew".
+      if (entries.length === 0) {
+        const live = await db.runner.count({
+          where: {
             eventId: ctx.event.id,
-            classId: cls?.id ?? null,
-            clubName: club.clubName,
-            eventorClubId: club.eventorClubId,
-            name: entry.personName,
-            cardNo: claimCardNo(
-              result?.cardNo || entry.cardNo,
-              `person:${entry.personId}`,
-            ),
-            eventorPersonId: BigInt(entry.personId),
-            eventorEntryId:
-              entry.eventorEntryId > 0 ? BigInt(entry.eventorEntryId) : null,
-            entrySource: clampInt32(eventorEventId),
-            birthYear: entry.birthYear,
-            sex: entry.sex,
-            nationality: (result?.nationality || entry.nationality).substring(0, 7),
-            entryDate: entry.entryDate,
-            entryTime: entry.entryTime,
-            startTime: result?.startTime ?? 0,
-            finishTime: result?.finishTime ?? 0,
-            status: valueToRunnerStatus(runnerStatus),
-            startNo: result?.startNo ?? 0,
-            bib: (result?.bib ?? "").substring(0, 17),
-            feeCents: clampInt32(entry.fee),
-            paidCents: clampInt32(entry.paid),
-            taxableCents: clampInt32(entry.taxable),
-            rank: Math.round(entry.rankingScore),
+            removed: false,
+            OR: [{ eventorPersonId: { not: null } }, { eventorEntryId: { not: null } }],
+            status: { not: "cancel" },
           },
         });
-        stats.runnersAdded++;
+        if (live > 0) throw emptyResponse("entry list");
       }
-      seen.add(entry.personId);
-    }
+      if (eventorClasses.length === 0) {
+        const linked = await db.class.count({
+          where: { eventId: ctx.event.id, removed: false, eventorId: { not: null } },
+        });
+        if (linked > 0) throw emptyResponse("class list");
+      }
 
-    // Pull in results-only late entries.
-    for (const result of results) {
-      if (result.personId <= 0 || seen.has(result.personId)) continue;
-      const cls = classByEventorId.get(result.classId);
-      const club = buildClubName(
-        {
+      // 3. A preview reads only: the directory is left alone and the club
+      //    names come from the entries.
+      if (input.dryRun) {
+        const clubs = collectClubs(entries, results);
+        const plan = await planEventorSync(db, {
           eventId: ctx.event.id,
           eventorEventId,
-          classByEventorId,
-          clubNameByEventorId: clubSync.clubNameByEventorId,
-        },
-        result.organisationId,
-        result.organisationName,
-      );
-      const found = byPersonId.get(result.personId);
-      if (!found) {
-        await db.runner.create({
-          data: {
-            eventId: ctx.event.id,
-            classId: cls?.id ?? null,
-            clubName: club.clubName,
-            eventorClubId: club.eventorClubId,
-            name: result.personName,
-            cardNo: claimCardNo(result.cardNo, `person:${result.personId}`),
-            eventorPersonId: BigInt(result.personId),
-            entrySource: clampInt32(eventorEventId),
-            birthYear: result.birthYear,
-            sex: result.sex,
-            nationality: (result.nationality ?? "").substring(0, 7),
-            startTime: result.startTime,
-            finishTime: result.finishTime,
-            status: valueToRunnerStatus(result.status as RunnerStatusValue),
-            startNo: result.startNo,
-            bib: (result.bib ?? "").substring(0, 17),
-          },
+          eventorClasses,
+          entries,
+          results,
+          clubNameByEventorId: namesOf(clubs),
         });
-        stats.runnersAdded++;
+        return syncResult(true, plan, await countClubChanges(db, [...clubs.values()]));
       }
-    }
 
-    // 5. Withdrawn detection: runners we had but Eventor no longer reports.
-    //    Mark them Cancel (21).
-    for (const r of existing) {
-      const personId = Number(r.eventorPersonId);
-      if (!seen.has(personId)) {
-        // Only mark Cancel if not previously cancelled.
-        if (r.status !== valueToRunnerStatus(21 as RunnerStatusValue)) {
-          await db.runner.update({
-            where: { id: r.id },
-            data: {
-              status: valueToRunnerStatus(21 as RunnerStatusValue),
-            },
+      const clubSync = await syncClubsFromEntries(apiKey, env, entries, results);
+
+      // 4. One transaction: the lease is re-checked inside it, and a failure
+      //    leaves the event as it was.
+      const result = await db.$transaction(
+        async (tx) => {
+          // Ordered against a checkout: whoever takes this lock second sees the
+          // other's result, so the lease is checked after taking it.
+          await lockEventLeaseAndSync(tx, ctx.event.id);
+          await refuseWhileCheckedOut(tx, ctx.event.id);
+          const plan = await planEventorSync(tx, {
+            eventId: ctx.event.id,
+            eventorEventId,
+            eventorClasses,
+            entries,
+            results,
+            clubNameByEventorId: clubSync.clubNameByEventorId,
           });
-          stats.cancelledCount++;
-        }
-      }
-    }
-
-    // A new entry, or one Eventor moved to another class, in a class on a
-    // forked course is dealt a variant; one moved off it loses hers (F6b).
-    await reconcileVariants(db, ctx.event.id);
-
-    await db.event.update({
-      where: { id: ctx.event.id },
-      data: { eventorLastSync: new Date() },
-    });
-
-    return stats;
-  }),
+          {
+            const seen = new Set(input.confirmCancelIds ?? []);
+            if (plan.runnerPlan.cancels.some((r) => !seen.has(r.id))) {
+              throw new TRPCError({
+                code: "PRECONDITION_FAILED",
+                message:
+                  "EVENTOR_PREVIEW_CHANGED: Eventor's data changed since the preview; some runners would now be withdrawn that you did not see. Preview again.",
+              });
+            }
+          }
+          const classIdByEventorId = await applyClassPlan(
+            tx,
+            ctx.event.id,
+            plan.classPlan,
+            plan.classRows,
+            eventorClasses,
+          );
+          await applyRunnerPlan(tx, {
+            eventId: ctx.event.id,
+            eventorEventId,
+            zeroTime: ctx.event.zeroTime,
+            plan: plan.runnerPlan,
+            classIdByEventorId,
+          });
+          // A new entry, or one Eventor moved to another class, in a class on a
+          // forked course is dealt a variant; one moved off it loses hers (F6b).
+          await reconcileVariants(tx, ctx.event.id);
+          await tx.event.update({
+            where: { id: ctx.event.id },
+            data: { eventorLastSync: new Date() },
+          });
+          return syncResult(false, plan, {
+            added: clubSync.added,
+            updated: clubSync.updated,
+          });
+        },
+        SYNC_TX_OPTIONS,
+      );
+      return result;
+    }),
 
   // ───────────── Global club / runner directory ─────────────
 
@@ -1218,125 +1439,21 @@ export const eventorRouter = router({
    * global runner_directory / club_directory tables. Fire-and-forget
    * logo fetch for clubs that lack one.
    */
-  syncRunnerDb: publicProcedure
+  syncRunnerDb: manageProcedure
     .input(z.object({ env: z.enum(["prod", "test"]).default("prod") }))
     .mutation(async ({ input }) => {
-      const { apiKey } = await requireApiKey(input.env);
-      const db = prisma();
-
-      // 1. Competitors
-      const competitors = await fetchCachedCompetitors(apiKey, input.env);
-
-      // 2. Aggregate the clubs referenced by competitors.
-      const clubMap = new Map<number, string>();
-      for (const c of competitors) {
-        if (c.clubEventorId > 0 && c.clubName) {
-          clubMap.set(c.clubEventorId, c.clubName);
-        }
+      if (runnerDbSyncRunning) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Runner database sync already running",
+        });
       }
-
-      // 3. Upsert competitor-referenced clubs first (name only).
-      const partialClubs: EventorClub[] = [...clubMap.entries()].map(
-        ([id, name]) => ({
-          id,
-          name,
-          shortName: "",
-          countryCode: "",
-          careOf: "",
-          street: "",
-          city: "",
-          zip: "",
-          email: "",
-          phone: "",
-          webUrl: "",
-        }),
-      );
-      await syncClubDirectoryEntries(partialClubs);
-
-      // 4. Try to enrich with full club details (name + short + country).
+      runnerDbSyncRunning = true;
       try {
-        const allClubs = await fetchClubs(apiKey, input.env);
-        await syncClubDirectoryEntries(allClubs);
-      } catch (err) {
-        console.warn("[syncRunnerDb] full club fetch failed:", err);
+        return await syncRunnerDbOnce(input);
+      } finally {
+        runnerDbSyncRunning = false;
       }
-
-      // 5. Upsert runner directory with one SQL statement per 1,000 rows.
-      //    Keep the global table in place so readers never see it empty.
-      const valid = [
-        ...new Map(
-          competitors
-            .filter((c) => c.extId > 0)
-            .map((c) => [c.extId, c] as const),
-        ).values(),
-      ];
-      await upsertRunnerDirectoryEntries(
-        db,
-        valid.map((c) => ({
-          eventorPersonId: BigInt(c.extId),
-          name: c.name,
-          cardNo: clampInt32(c.cardNo),
-          eventorClubId: clampInt32(c.clubEventorId),
-          birthYear: c.birthYear,
-          sex: c.sex,
-          nationality: c.nationality,
-        })),
-      );
-
-      // 6. Background logo fetch for clubs that still lack a small logo.
-      void (async () => {
-        try {
-          const needsLogo = await db.clubDirectory.findMany({
-            where: {
-              eventorId: { in: [...clubMap.keys()].map((id) => BigInt(id)) },
-              smallLogoPng: null,
-            },
-            select: { eventorId: true },
-            take: 200,
-          });
-          for (const c of needsLogo) {
-            try {
-              const small = await fetchClubLogo(
-                Number(c.eventorId),
-                apiKey,
-                "SmallIcon",
-              );
-              const large = await fetchClubLogo(
-                Number(c.eventorId),
-                apiKey,
-                "LargeIcon",
-              );
-              if (small) {
-                await db.clubDirectory.update({
-                  where: { eventorId: c.eventorId },
-                  data: {
-                    smallLogoPng: Buffer.from(small),
-                    ...(large ? { largeLogoPng: Buffer.from(large) } : {}),
-                    updatedAt: new Date(),
-                  },
-                });
-              }
-            } catch {
-              // skip individual failures
-            }
-          }
-        } catch {
-          // non-critical
-        }
-      })();
-
-      // 7. Record sync state in settings.
-      await Promise.all([
-        setSetting("runnerdb_last_sync", new Date().toISOString()),
-        setSetting("runnerdb_runner_count", String(valid.length)),
-        setSetting("runnerdb_club_count", String(clubMap.size)),
-      ]);
-
-      return {
-        runners: valid.length,
-        clubs: clubMap.size,
-        logosAdded: 0, // background — count not available synchronously
-      };
     }),
 
   /**
@@ -1361,7 +1478,7 @@ export const eventorRouter = router({
 
   // ───────────── Lookups ─────────────
 
-  runnerDbStatus: publicProcedure.query(async () => {
+  runnerDbStatus: manageProcedure.query(async () => {
     const [last, runners, clubs] = await Promise.all([
       getSetting("runnerdb_last_sync"),
       getSetting("runnerdb_runner_count"),
@@ -1374,7 +1491,7 @@ export const eventorRouter = router({
     };
   }),
 
-  searchRunnerDb: publicProcedure
+  searchRunnerDb: raceOperateProcedure
     .input(z.object({ query: z.string().min(2) }))
     .query(async ({ input }) => {
       const db = prisma();
@@ -1419,7 +1536,7 @@ export const eventorRouter = router({
       }));
     }),
 
-  lookupByCardNo: publicProcedure
+  lookupByCardNo: raceOperateProcedure
     .input(z.object({ cardNo: z.number().int().positive() }))
     .query(async ({ input }) => {
       const db = prisma();
@@ -1445,7 +1562,7 @@ export const eventorRouter = router({
       };
     }),
 
-  clubMembers: publicProcedure
+  clubMembers: raceOperateProcedure
     .input(
       z.object({
         organisationId: z.number().int().positive(),
@@ -1472,7 +1589,7 @@ export const eventorRouter = router({
    * Compact dump of the full runner directory + club name lookup.
    * Used by RegistrationDialog for offline client-side search.
    */
-  runnerDbDump: publicProcedure.query(async () => {
+  runnerDbDump: raceOperateProcedure.query(async () => {
     const db = prisma();
     const [runners, clubs] = await Promise.all([
       db.runnerDirectory.findMany({
@@ -1525,7 +1642,7 @@ export const eventorRouter = router({
    * Returns `{ runnerCount }` for the UI status line.
    */
   pushResults: manageProcedure
-    .input(z.object({ dryRun: z.boolean().optional() }).optional())
+    .input(z.object({ dryRun: z.boolean().optional(), includeCourse: z.boolean().default(true) }).optional())
     .mutation(async ({ ctx, input }): Promise<{ runnerCount: number }> => {
       const event = await ctx.db.event.findUnique({
         where: { id: ctx.event.id },
@@ -1534,6 +1651,7 @@ export const eventorRouter = router({
           name: true,
           date: true,
           zeroTime: true,
+          timeZone: true,
           eventorEventId: true,
           eventorEnv: true,
           cardFeeCents: true,
@@ -1564,8 +1682,9 @@ export const eventorRouter = router({
           ctx.db.card.findMany({
             where: { eventId: ctx.event.id, removed: false },
           }),
+          // Backup-memory rows count only through their pushed mirror (RES-08).
           ctx.db.punch.findMany({
-            where: { eventId: ctx.event.id, removed: false },
+            where: { eventId: ctx.event.id, removed: false, source: { not: "backup_memory" } },
             orderBy: { time: "asc" },
           }),
         ],
@@ -1574,6 +1693,12 @@ export const eventorRouter = router({
       const classById = new Map(classes.map((c) => [c.id, c]));
       const courseById = new Map(courses.map((c) => [c.id, c]));
       const cardById = new Map(cards.map((c) => [c.id, c]));
+      const cardsByNo = new Map<number, typeof cards>();
+      for (const c of cards) {
+        const list = cardsByNo.get(c.cardNo) ?? [];
+        list.push(c);
+        cardsByNo.set(c.cardNo, list);
+      }
 
       // Pre-compute ExpectedPositions per course so each runner mapping
       // is O(1) — one SQL query per course up front, not per runner.
@@ -1610,7 +1735,12 @@ export const eventorRouter = router({
         const positions = positionsByCourse.get(courseId) ?? [];
         if (positions.length === 0) continue;
 
-        const card = r.cardId ? cardById.get(r.cardId) : null;
+        // The linked card only while it has the runner's number (API-11).
+        const card = pickRunnerCard(
+          r,
+          r.cardId ? cardById.get(r.cardId) : null,
+          cardsByNo.get(r.cardNo ?? -1) ?? [],
+        );
         const cardPunches = parsePunches(card?.punchesRaw ?? "").map((p) => ({
           ...p,
           time: p.time !== 0 ? toAbsolute(p.time, event.zeroTime) : 0,
@@ -1622,9 +1752,7 @@ export const eventorRouter = router({
           time: p.time !== 0 ? toAbsolute(p.time, event.zeroTime) : 0,
           source: "free" as const,
         }));
-        const merged = [...cardPunches, ...freePunches].sort(
-          (a, b) => a.time - b.time,
-        );
+        const merged = mergePunchesInCardOrder(cardPunches, freePunches);
         const fallbackStart = toAbsolute(r.startTime, event.zeroTime);
         const course = courseById.get(courseId);
         const matched = matchPunchesToCourse(merged, positions, fallbackStart, {
@@ -1659,8 +1787,10 @@ export const eventorRouter = router({
             return {
               id: idx,
               status: runnerStatusToValue(r.status),
-              startTime: r.startTime,
-              finishTime: r.finishTime,
+              // Absolute: stored relative times are negative before
+              // ZeroTime and would get no place (RES-05).
+              startTime: toAbsolute(r.startTime, event.zeroTime),
+              finishTime: toAbsolute(r.finishTime, event.zeroTime),
               runningTimeAdjustment: adjustmentByRunner.get(r.id) ?? 0,
             };
           }),
@@ -1673,6 +1803,7 @@ export const eventorRouter = router({
       }
 
       // Build the ResultForUpload[] payload.
+      const nowDs = eventNowDs(event);
       const uploadData: ResultForUpload[] = runners.map((r) => {
         const cls = r.classId ? classById.get(r.classId) : null;
         const courseId = r.courseId ?? cls?.courseId ?? null;
@@ -1754,11 +1885,17 @@ export const eventorRouter = router({
           finishTime: toAbsolute(r.finishTime, event.zeroTime) || undefined,
           runningTimeAdjustment: adjustmentByRunner.get(r.id),
           status: oxygenStatus,
+          started:
+            hasStartedByClock(r.startTime, event.zeroTime, nowDs) ||
+            (matched?.matches.some((m) => m.status === "ok") ?? false) ||
+            (r.cardNo != null && (freePunchesByCardNo.get(r.cardNo)?.length ?? 0) > 0),
           place: placement?.place ?? 0,
           noTiming: cls?.noTiming === true,
-          course: classCourseForUpload(
-            cls?.courseId ? courseById.get(cls.courseId) : null,
-          ),
+          // The organiser may leave the element out (docs/course-elevation.md §8).
+          course:
+            input?.includeCourse === false
+              ? undefined
+              : classCourseForUpload(cls?.courseId ? courseById.get(cls.courseId) : null),
           fee: r.feeCents || undefined,
           cardFee:
             r.cardFeeCents !== 0
@@ -1780,16 +1917,19 @@ export const eventorRouter = router({
         return { runnerCount: uploadData.length };
       }
 
-      await uploadResults(
-        apiKey,
-        event.eventorEventId.toString(),
-        event.name,
-        event.date.toISOString().slice(0, 10),
-        uploadData,
-        env,
-        event.currencyCode || "",
-        event.currencyFactor || 100,
-      );
+      const eventorEventId = event.eventorEventId.toString();
+      await withPushGuard(`${ctx.event.id}:results`, async () => {
+        await uploadResults(
+          apiKey,
+          eventorEventId,
+          event.name,
+          event.date.toISOString().slice(0, 10),
+          uploadData,
+          env,
+          event.currencyCode || "",
+          event.currencyFactor || 100,
+        );
+      });
 
       return { runnerCount: uploadData.length };
     }),
@@ -1800,7 +1940,7 @@ export const eventorRouter = router({
    * pass.
    */
   pushStartList: manageProcedure
-    .input(z.object({ dryRun: z.boolean().optional() }).optional())
+    .input(z.object({ dryRun: z.boolean().optional(), includeCourse: z.boolean().default(true) }).optional())
     .mutation(async ({ ctx, input }): Promise<{ runnerCount: number }> => {
       const event = await ctx.db.event.findUnique({
         where: { id: ctx.event.id },
@@ -1851,9 +1991,11 @@ export const eventorRouter = router({
           cardNo: r.cardNo || undefined,
           startTime: toAbsolute(r.startTime, event.zeroTime) || undefined,
           status: runnerStatusToValue(r.status),
-          course: classCourseForUpload(
-            cls?.courseId ? courseById.get(cls.courseId) : null,
-          ),
+          // The organiser may leave the element out (docs/course-elevation.md §8).
+          course:
+            input?.includeCourse === false
+              ? undefined
+              : classCourseForUpload(cls?.courseId ? courseById.get(cls.courseId) : null),
         };
       });
 
@@ -1861,14 +2003,17 @@ export const eventorRouter = router({
         return { runnerCount: uploadData.length };
       }
 
-      await uploadStartList(
-        apiKey,
-        event.eventorEventId.toString(),
-        event.name,
-        event.date.toISOString().slice(0, 10),
-        uploadData,
-        env,
-      );
+      const eventorEventId = event.eventorEventId.toString();
+      await withPushGuard(`${ctx.event.id}:startlist`, async () => {
+        await uploadStartList(
+          apiKey,
+          eventorEventId,
+          event.name,
+          event.date.toISOString().slice(0, 10),
+          uploadData,
+          env,
+        );
+      });
 
       return { runnerCount: uploadData.length };
     }),
@@ -1907,7 +2052,7 @@ export const eventorRouter = router({
    * one bad id doesn't block the rest. Returns a per-event status the
    * UI can show inline.
    */
-  fetchEntryHistory: publicProcedure
+  fetchEntryHistory: authedProcedure
     .input(
       z.object({
         eventIds: z.array(z.number().int().positive()).min(1).max(20),

@@ -18,7 +18,10 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEventClock } from "../hooks/useEventClock";
 import { trpc } from "../lib/trpc";
+import { ensureEventCache } from "../lib/offline/persister";
 import { ClubLogo } from "../components/ClubLogo";
 import { KioskAccessGate } from "../components/KioskAccessGate";
 
@@ -44,10 +47,6 @@ interface MinuteGroup {
 }
 
 // ─── Helpers ────────────────────────────────────────────────
-
-function wallClockToMeos(date: Date): number {
-    return (date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds()) * 10;
-}
 
 function formatMinute(ds: number): string {
     const totalSec = Math.floor(ds / 10);
@@ -100,7 +99,9 @@ function StartScreenPageBody() {
     const { nameId } = useParams<{ nameId: string }>();
     const [offsetMinutes, setOffsetMinutes] = useState(3);
     const [showSettings, setShowSettings] = useState(false);
-    const [now, setNow] = useState(() => new Date());
+    // The event's clock (event time zone, synced with the server, ticks
+    // locally), the same one the start station shows (RES-06).
+    const clock = useEventClock({ tickMs: 1000 });
     const [transitioning, setTransitioning] = useState(false);
     const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
     const prevMinuteRef = useRef<number>(-1);
@@ -113,26 +114,33 @@ function StartScreenPageBody() {
     }, []);
 
     // Select competition
-    const selectMutation = trpc.competition.select.useMutation();
+    const queryClient = useQueryClient();
+    const selectMutation = trpc.competition.select.useMutation({ networkMode: "always" });
+    // The start list runs from the event's cache once it is claimed, server
+    // or not: a start screen reloaded during an outage keeps its list (WEB-03).
+    const [cacheClaimed, setCacheClaimed] = useState(false);
     useEffect(() => {
-        if (nameId) selectMutation.mutate({ nameId });
+        if (!nameId) return;
+        let cancelled = false;
+        setCacheClaimed(false);
+        // The cache belongs to one event (MC-04).
+        void ensureEventCache(queryClient, nameId).then(() => {
+            if (cancelled) return;
+            setCacheClaimed(true);
+            selectMutation.mutate({ nameId });
+        });
+        return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [nameId]);
 
     // Fetch runner data (poll every 5s)
     const { data } = trpc.competition.startScreen.useQuery(undefined, {
-        enabled: selectMutation.isSuccess,
+        enabled: cacheClaimed,
         refetchInterval: 5000,
     });
 
-    // Tick clock every second
-    useEffect(() => {
-        const id = setInterval(() => setNow(new Date()), 1000);
-        return () => clearInterval(id);
-    }, []);
-
     // ── Timing ─────────────────────────────────────────────────
-    const meosNow = wallClockToMeos(now);
+    const meosNow = clock.currentDs;
     // The advance clock = wall clock + offset
     const advanceClock = meosNow + offsetMinutes * 600;
     const advanceFloorMinute = floorToMinute(advanceClock);

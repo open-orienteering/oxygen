@@ -105,6 +105,17 @@ describe("event type permissions", () => {
   });
 });
 
+describe("test event permissions (API-06)", () => {
+  it("setTestEvent and every guarded Test Lab call need event.manage", async () => {
+    await expect(callerFor(setter).event.setTestEvent({ enabled: true })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(callerFor(member).event.setTestEvent({ enabled: true })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(callerFor(crew).testLab.clearRunners()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(callerFor(crew).testLab.defaults()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect((await callerFor(admin).event.setTestEvent({ enabled: true })).isTestEvent).toBe(true);
+    await callerFor(admin).event.setTestEvent({ enabled: false });
+  });
+});
+
 describe("permission grant/revoke", () => {
   it("grant → list → revoke", async () => {
     const email = `extra-${suffix}@perms-test.example`;
@@ -520,6 +531,43 @@ describe("kiosk key", () => {
     });
   });
 
+  it("a key-only device cannot store readouts, apply results or push its outbox (D11)", async () => {
+    // Pins the offline-readout design: a kiosk-key-only device keeps its
+    // card.read entries in its own outbox and an operator drains them. No
+    // server surface was widened for it (docs/system/authentication.md).
+    const key = "kiosk-secret-token-cccc";
+    await ctx.db.event.update({ where: { id: ctx.eventId }, data: { kioskKey: key } });
+    const event = { ...ctx.event, kioskKey: key };
+    const kiosk = makeCaller(event, {
+      user: null,
+      authEnabled: true,
+      identityEmail: null,
+      kioskKey: key,
+    });
+    await expect(
+      kiosk.cardReadout.storeReadout({ cardNo: 999001, punches: [] }),
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(
+      kiosk.cardReadout.applyResult({ runnerId: 1, status: 1, finishTime: 1, startTime: 1 }),
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(
+      kiosk.race.recordFinish({ id: 1, finishTimeAbsolute: 360_000 }),
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(kiosk.events.push({ events: [] })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(
+      kiosk.events.push({
+        events: [{
+          id: "00000000-0000-4000-8000-000000000abc",
+          type: "card.read",
+          competitionId: event.nameId,
+          stationId: "kiosk",
+          timestamp: 1_700_000_000_000,
+          payload: { cardNo: 999002, punches: [] },
+        }],
+      }),
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
   it("key-only devices can read the map data set MapPanel needs, but not edit", async () => {
     // The kiosk shows the runner's course on the map after a readout —
     // all of MapPanel's queries must accept a kiosk key (mirrors the
@@ -558,5 +606,105 @@ describe("kiosk key", () => {
     await expect(wrong.course.list()).rejects.toMatchObject({
       code: "UNAUTHORIZED",
     });
+  });
+});
+
+describe("runner registration needs Race crew, edit and delete stay Event admin", () => {
+  it("race crew can runner.create but not runner.update / runner.delete", async () => {
+    const cls = await callerFor(admin).class.create({ name: "Crew-reg" });
+    const created = await callerFor(crew).runner.create({
+      name: "Desk Dana",
+      classId: cls.id,
+      clubName: "OK",
+    });
+    expect(created.id).toBeGreaterThan(0);
+    await expect(
+      callerFor(crew).runner.update({ id: created.id, name: "Renamed" }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(callerFor(crew).runner.delete({ id: created.id })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    // The queued equivalent (events.push runner.registered) follows the same rule.
+    await callerFor(admin).runner.delete({ id: created.id });
+  });
+
+  it("a member without a race grant cannot runner.create", async () => {
+    const cls = await callerFor(admin).class.create({ name: "Member-reg" });
+    await expect(
+      callerFor(member).runner.create({ name: "Nope", classId: cls.id, clubName: "OK" }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
+
+describe("runner directory and Eventor browse gates (API-16)", () => {
+  const anon = () => makeCaller(ctx.event, { user: null, authEnabled: true, identityEmail: null });
+
+  it("every public lookup now answers an anonymous caller UNAUTHORIZED", async () => {
+    const a = anon();
+    const calls: Array<[string, () => Promise<unknown>]> = [
+      ["eventor.runnerDbDump", () => a.eventor.runnerDbDump()],
+      ["eventor.searchRunnerDb", () => a.eventor.searchRunnerDb({ query: "ab" })],
+      ["eventor.lookupByCardNo", () => a.eventor.lookupByCardNo({ cardNo: 1 })],
+      ["eventor.clubMembers", () => a.eventor.clubMembers({ organisationId: 1 })],
+      ["eventor.runnerDbStatus", () => a.eventor.runnerDbStatus()],
+      ["eventor.syncRunnerDb", () => a.eventor.syncRunnerDb({})],
+      ["eventor.events", () => a.eventor.events()],
+      ["eventor.searchEvents", () => a.eventor.searchEvents({ query: "x" })],
+      ["eventor.eventDetail", () => a.eventor.eventDetail({ eventId: 1 })],
+      ["eventor.fetchEntryHistory", () => a.eventor.fetchEntryHistory({ eventIds: [1] })],
+      ["club.searchDirectory", () => a.club.searchDirectory({ query: "ok" })],
+      ["event.dbStatus", () => a.event.dbStatus()],
+      ["competition.dbStatus", () => a.competition.dbStatus()],
+      ["registrationTrends.lookupEventorEvent", () => a.registrationTrends.lookupEventorEvent({ eventorEventId: 1 } as never)],
+      ["registrationTrends.findComparableEvents", () => a.registrationTrends.findComparableEvents({} as never)],
+      ["registrationTrends.fetchComparison", () => a.registrationTrends.fetchComparison({} as never)],
+      ["registrationTrends.listCachedEvents", () => a.registrationTrends.listCachedEvents()],
+      ["registrationTrends.entryHistory", () => a.registrationTrends.entryHistory({} as never)],
+    ];
+    for (const [name, run] of calls) {
+      await expect(run(), name).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    }
+  });
+
+  it("the personal-data lookups need race.operate: a member is FORBIDDEN, race crew gets through", async () => {
+    const m = callerFor(member);
+    await expect(m.eventor.runnerDbDump()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(m.eventor.searchRunnerDb({ query: "ab" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(m.eventor.lookupByCardNo({ cardNo: 123456 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(m.eventor.clubMembers({ organisationId: 1 })).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    const c = callerFor(crew);
+    expect(await c.eventor.runnerDbDump()).toHaveProperty("runners");
+    expect(Array.isArray(await c.eventor.searchRunnerDb({ query: "zzzz-none" }))).toBe(true);
+    expect(await c.eventor.lookupByCardNo({ cardNo: 2_000_000_000 })).toBeNull();
+    // clubMembers reaches the handler (no Eventor key here: its own refusal, not a gate).
+    await expect(c.eventor.clubMembers({ organisationId: 1 })).rejects.not.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("a kiosk key does not open the runner directory", async () => {
+    await ctx.db.event.update({ where: { id: ctx.eventId }, data: { kioskKey: "kiosk-key-runner-db-1234567" } });
+    try {
+      const event = { ...ctx.event, kioskKey: "kiosk-key-runner-db-1234567" };
+      const kiosk = makeCaller(event, { user: null, authEnabled: true, identityEmail: null, kioskKey: "kiosk-key-runner-db-1234567" });
+      await expect(kiosk.eventor.runnerDbDump()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    } finally {
+      await ctx.db.event.update({ where: { id: ctx.eventId }, data: { kioskKey: null } });
+    }
+  });
+
+  it("syncing the runner directory is an event.manage action, not race crew's", async () => {
+    await expect(callerFor(crew).eventor.syncRunnerDb({})).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(callerFor(member).eventor.syncRunnerDb({})).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(callerFor(crew).eventor.runnerDbStatus()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await callerFor(admin).eventor.runnerDbStatus()).toHaveProperty("runnerCount");
+  });
+
+  it("the club-name directory and the browse calls are open to any signed-in member", async () => {
+    const m = callerFor(member);
+    expect(Array.isArray(await m.club.searchDirectory({ query: "ok" }))).toBe(true);
+    expect(await m.event.dbStatus()).toBeDefined();
+    // Eventor browse: the key is unset in this suite, so the handler's own refusal, never a gate.
+    await expect(m.eventor.events()).rejects.not.toMatchObject({ code: "FORBIDDEN" });
+    await expect(m.eventor.events()).rejects.not.toMatchObject({ code: "UNAUTHORIZED" });
   });
 });

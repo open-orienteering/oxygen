@@ -19,6 +19,7 @@ import { course, symbolLibrary } from "@oxygen/shared";
 import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
 import { loadEventCrs } from "./event-crs.js";
 import { courseSequenceOf } from "./course-structure.js";
+import { emitCourseUpserted } from "./referenceJournal.js";
 
 /** One entry of a course's rendered sequence (start + controls + finish). */
 export interface GeometrySeqControl {
@@ -271,7 +272,7 @@ export async function rebuildCourseLengths(
   db: Db,
   eventId: bigint,
   courseUuids: string[],
-  opts: { updateLength?: boolean } = {},
+  opts: { updateLength?: boolean; keepSource?: boolean } = {},
 ): Promise<void> {
   if (courseUuids.length === 0) return;
   const updateLength = opts.updateLength ?? true;
@@ -287,8 +288,10 @@ export async function rebuildCourseLengths(
       // The length provenance the export and the Eventor sync read
       // (course-controls-and-matching.md "Course length"): an edited
       // course's length is derived from its controls; one with no
-      // positioned control has neither.
-      lengthSource: hasPositionedItems(layer) ? "derived" : null,
+      // positioned control has neither. `keepSource`: only the legs are
+      // re-derived and the stored length keeps its provenance (an import
+      // whose file states no length, course-layer.md §6.4).
+      ...(opts.keepSource ? {} : { lengthSource: hasPositionedItems(layer) ? "derived" : null }),
     };
     // Free-order courses have no meaningful legs — leave lengthM / legs
     // alone (the organiser sets length manually). Ordered courses keep
@@ -317,11 +320,21 @@ export async function rebuildCourseLengths(
  * the event) and marks them for the compute that follows the commit.
  * For every change of what a climb rests on: a course's legs, a
  * control's position, the event's map (docs/course-elevation.md §6 "When").
+ * Returns the ids it cleared. `emit`: each cleared course is journaled
+ * (the token not advanced), for a clear outside an edit that journals the
+ * course itself afterwards; without it a peer keeps the old climb until
+ * the compute that follows writes the new one (§6).
  */
-export async function clearComputedClimbs(db: Db, eventId: bigint, courseUuids: readonly string[] | "all"): Promise<void> {
-  await db.course.updateMany({
-    where: { eventId, climbSource: "computed", ...(courseUuids === "all" ? {} : { id: { in: [...courseUuids] } }) },
-    data: { climbM: 0, climbSource: null },
-  });
+export async function clearComputedClimbs(
+  db: Db,
+  eventId: bigint,
+  courseUuids: readonly string[] | "all",
+  opts: { emit?: boolean } = {},
+): Promise<string[]> {
+  const where = { eventId, climbSource: "computed", ...(courseUuids === "all" ? {} : { id: { in: [...courseUuids] } }) };
+  const ids = (await db.course.findMany({ where, select: { id: true }, orderBy: { id: "asc" } })).map((c) => c.id);
+  if (ids.length > 0) await db.course.updateMany({ where: { ...where, id: { in: ids } }, data: { climbM: 0, climbSource: null } });
   markClimbPending(eventId, courseUuids);
+  if (opts.emit) for (const id of ids) await emitCourseUpserted(db, eventId, id, { advanceVersion: false });
+  return ids;
 }

@@ -15,7 +15,7 @@ export type RouteWorkerRequest =
   /** The map document (and the event's patch on it) under `key`. */
   | { type: "doc"; key: string; bytes: ArrayBuffer | Uint8Array; patch: mapDocument.MapPatch | null }
   /** The height field under `key`. */
-  | { type: "field"; key: string; field: HeightField }
+  | { type: "field"; key: string; field: HeightField; intervalM?: number }
   | { type: "find"; id: number; docKey: string; fieldKey: string | null; req: LegRouteRequest }
   /** What each leg costs along its polyline (§7.8 "Pace"). */
   | { type: "costs"; id: number; docKey: string; fieldKey: string | null; req: LegCostsRequest };
@@ -44,7 +44,8 @@ export function createRouteWorkerState(): (msg: RouteWorkerRequest) => RouteWork
       return null;
     }
     if (msg.type === "field") {
-      field = { key: msg.key, heightAt: fieldSampler(msg.field).heightAt };
+      // Read at the interval a person confirmed, as the displayed climb is (§0.43): the costs and the numbers agree.
+      field = { key: msg.key, heightAt: fieldSampler(msg.field, msg.intervalM !== undefined ? { intervalM: msg.intervalM } : {}).heightAt };
       return null;
     }
     try {
@@ -72,7 +73,7 @@ export interface RouteWorkerLike {
 export interface RouteSearchInput {
   doc: { key: string; bytes: ArrayBuffer | Uint8Array; patch: mapDocument.MapPatch | null };
   /** The height field, or null to search without slopes. */
-  field: { key: string; field: HeightField } | null;
+  field: { key: string; field: HeightField; intervalM?: number } | null;
   req: LegRouteRequest;
 }
 
@@ -128,7 +129,7 @@ export function createRouteFinder(createWorker: () => RouteWorkerLike = createRo
         sentDoc = doc.key;
       }
       if (field && sentField !== field.key) {
-        w.postMessage({ type: "field", key: field.key, field: field.field });
+        w.postMessage({ type: "field", key: field.key, field: field.field, ...(field.intervalM !== undefined ? { intervalM: field.intervalM } : {}) });
         sentField = field.key;
       }
     } catch (err) {

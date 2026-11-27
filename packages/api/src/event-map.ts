@@ -15,6 +15,7 @@ import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
 import { prisma } from "./db.js";
 import { clearComputedClimbs, rebuildCourseLengths } from "./course-geometry.js";
 import { emitCourseUpserted } from "./referenceJournal.js";
+import { mayWriteEventData } from "./sync/lease.js";
 import type { WGS84Bounds } from "./map-projection.js";
 import { meridianStalenessFromDetection } from "./map-north.js";
 import { synchronizePositionedControlCoordinates } from "./event-crs.js";
@@ -64,16 +65,31 @@ async function documentStaleness(db: Db, documentHash: string | null): Promise<n
  * legs string follows the new scale.
  */
 async function refreshDerivedCourses(db: Db, eventId: bigint): Promise<void> {
+  // The map change itself stays cloud-owned and goes ahead; the course rows
+  // it would re-derive belong to the node that holds the lease (a venue box
+  // during a checkout), so the cloud neither writes nor journals them (the
+  // write guard, review D8). The holder's map refresh (`mapRefresh.ts`)
+  // clears and recomputes the climbs when it replaces the map's rows
+  // (docs/course-elevation.md §6 "During a lease"); it does not call
+  // `rebuildCourseLengths`, so a derived length stays stale until its
+  // course is next edited (docs/bugfixes/venue-shipping-and-lease.md, "Left out").
+  const verdict = await mayWriteEventData(db, eventId);
+  if (!verdict.ok) {
+    console.info(
+      `[event-map] event ${eventId}: derived course lengths not refreshed on this node (${verdict.reason}${verdict.holder ? ` "${verdict.holder}"` : ""}); the holder re-derives them.`,
+    );
+    return;
+  }
   // Every computed climb rested on the previous map's heights, whatever the course's length source.
-  await clearComputedClimbs(db, eventId, "all");
+  const cleared = await clearComputedClimbs(db, eventId, "all");
   const derived = await db.course.findMany({
     where: { eventId, removed: false, lengthSource: "derived" },
     select: { id: true },
   });
-  if (derived.length === 0) return;
   const ids = derived.map((c) => c.id);
-  await rebuildCourseLengths(db, eventId, ids, { updateLength: false });
-  for (const id of ids) {
+  if (ids.length > 0) await rebuildCourseLengths(db, eventId, ids, { updateLength: false });
+  // One journal entry per course whose row changed: the derived ones and the ones whose climb was cleared.
+  for (const id of new Set([...ids, ...cleared])) {
     // Derived fields only: the structure and its token are unchanged.
     await emitCourseUpserted(db, eventId, id, { advanceVersion: false });
   }

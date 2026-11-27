@@ -2,6 +2,7 @@ import { useState, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { SearchableSelect } from "./SearchableSelect";
+import { classMappedTwice, consequenceLines, type ConsequenceTone } from "../lib/course-import-consequences";
 
 interface Props {
   onClose: () => void;
@@ -22,12 +23,9 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
   const [classMapping, setClassMapping] = useState<Record<string, number[]>>({});
   const [dragOver, setDragOver] = useState(false);
   const [hideFullyMatched, setHideFullyMatched] = useState(false);
-  // "Replace all" is the default: most users import a complete course
-  // set and expect previous courses/controls to be wiped before the
-  // new file lands. Append/merge is the opt-in alternative, useful
-  // when adding a course set on top of an existing one (e.g. a relay
-  // added on top of an individual race).
-  const [replaceAll, setReplaceAll] = useState(true);
+  // Merge is the default: Replace all is the destructive mode, chosen on
+  // purpose with its consequence list in view (D3, course-layer.md §6.4).
+  const [replaceAll, setReplaceAll] = useState(false);
   // Purple Pen coordinates are anchored to the map the courses were set
   // on. When that map is not the event's and we cannot re-project, the
   // safe default is to import codes and sequences only.
@@ -38,14 +36,15 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
     onSuccess: (data) => {
       setPreview(data);
       setSkipPositions(data.coordinateAlignment === "mismatch");
-      // Build initial class mapping from auto-matches, position-aligned with
-      // course.classMatches so each row's SearchableSelect can read its own
-      // index. Unmatched rows start at 0 ("Skip"); the user can fill them in.
+      // Build initial class mapping from the server's pre-selection,
+      // position-aligned with course.classMatches so each row's
+      // SearchableSelect can read its own index. A substring guess or a
+      // class the file puts on several courses starts at 0 ("Skip").
       const mapping: Record<string, number[]> = {};
       for (const course of data.courses) {
         if (course.classMatches.length === 0) continue;
         mapping[course.name] = course.classMatches.map((m) =>
-          m.matched ? m.dbClassId : 0,
+          m.preselect ? m.dbClassId : 0,
         );
       }
       setClassMapping(mapping);
@@ -152,6 +151,14 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
         0,
       )
     : 0;
+
+  const modeBlockers = preview ? (replaceAll ? preview.blockers.replaceAll : preview.blockers.merge) : [];
+  // A class picked on two course rows: the server would refuse it.
+  const mappedTwice = preview ? classMappedTwice(classMapping) : [];
+  const classNameOf = (seq: number) => preview?.dbClasses.find((c) => c.id === seq)?.name ?? String(seq);
+  const lines = preview
+    ? consequenceLines(replaceAll ? preview.consequences.replaceAll : preview.consequences.merge, classMapping)
+    : [];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -284,7 +291,7 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                 </div>
               )}
 
-              {/* Replace vs append mode */}
+              {/* Merge vs Replace all */}
               <fieldset className="border border-slate-200 rounded-lg p-3">
                 <legend className="px-2 text-xs font-semibold text-slate-600 uppercase tracking-wider">
                   {t("importMode")}
@@ -294,9 +301,28 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                     <input
                       type="radio"
                       name="importMode"
+                      data-testid="course-import-mode-merge"
+                      checked={!replaceAll}
+                      onChange={() => setReplaceAll(false)}
+                      className="mt-0.5 w-4 h-4 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    />
+                    <span className="flex-1">
+                      <span className="block text-sm font-medium text-slate-900">
+                        {t("mergeLabel")}
+                      </span>
+                      <span className="block text-xs text-slate-500 mt-0.5">
+                        {t("mergeHint")}
+                      </span>
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="importMode"
+                      data-testid="course-import-mode-replace"
                       checked={replaceAll}
                       onChange={() => setReplaceAll(true)}
-                      className="mt-0.5 w-4 h-4 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                      className="mt-0.5 w-4 h-4 text-red-600 focus:ring-red-500 cursor-pointer"
                     />
                     <span className="flex-1">
                       <span className="block text-sm font-medium text-slate-900">
@@ -307,25 +333,67 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                       </span>
                     </span>
                   </label>
-                  <label className="flex items-start gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="importMode"
-                      checked={!replaceAll}
-                      onChange={() => setReplaceAll(false)}
-                      className="mt-0.5 w-4 h-4 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                    />
-                    <span className="flex-1">
-                      <span className="block text-sm font-medium text-slate-900">
-                        {t("appendLabel")}
-                      </span>
-                      <span className="block text-xs text-slate-500 mt-0.5">
-                        {t("appendHint")}
-                      </span>
-                    </span>
-                  </label>
                 </div>
               </fieldset>
+
+              {/* Refusals: nothing is imported while any applies */}
+              {(modeBlockers.length > 0 || mappedTwice.length > 0) && (
+                <div
+                  data-testid="course-import-blockers"
+                  className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800 space-y-1"
+                >
+                  {modeBlockers.map((b, i) => (
+                    <p key={i}>{t(`blocker.${b.code}`, { ids: b.ids.join(", "), holder: b.holders?.[0] ?? "" })}</p>
+                  ))}
+                  {mappedTwice.map((m) => (
+                    <p key={`twice-${m.seq}`}>{t("blocker.class_mapped_twice", { className: classNameOf(m.seq), courses: m.courseNames.join(", ") })}</p>
+                  ))}
+                </div>
+              )}
+
+              {/* A file of controls only (Merge): positions are updated, no course is touched */}
+              {preview.courses.length === 0 && modeBlockers.length === 0 && (
+                <div
+                  data-testid="course-import-no-courses-hint"
+                  className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800"
+                >
+                  {t("noCoursesMergeHint")}
+                </div>
+              )}
+
+              {/* What this import will do, for the selected mode */}
+              {lines.length > 0 && (
+                <div
+                  data-testid="course-import-consequences"
+                  className="border border-slate-200 rounded-lg p-3 text-sm space-y-1"
+                >
+                  <p className="text-xs font-semibold text-slate-600 uppercase tracking-wider">
+                    {t("consequencesTitle")}
+                  </p>
+                  {lines.map((line) => (
+                    <details key={line.key} data-testid={`course-import-consequence-${line.key}`} className={TONE_CLASS[line.tone]}>
+                      <summary className={line.names.length > 0 ? "cursor-pointer" : "list-none"}>
+                        {t(`consequence.${line.key}`, { count: line.count })}
+                      </summary>
+                      {line.names.length > 0 && (
+                        <p className="text-xs pl-4 pt-0.5 break-words">{line.names.join(", ")}</p>
+                      )}
+                    </details>
+                  ))}
+                </div>
+              )}
+
+              {/* Classes the file puts on several courses are left unassigned */}
+              {preview.warnings.length > 0 && (
+                <div
+                  data-testid="course-import-class-warnings"
+                  className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800 space-y-1"
+                >
+                  {preview.warnings.map((w, i) => (
+                    <p key={i}>{t(`classWarning.${w.code}`, { className: w.className, courses: w.courseNames.join(", ") })}</p>
+                  ))}
+                </div>
+              )}
 
               {/* Course table with class mapping */}
               <div>
@@ -458,29 +526,6 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                 </div>
               </div>
 
-              {/* Replace-all toggle */}
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <label className="flex items-start gap-3 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    data-testid="course-import-replace-all"
-                    checked={replaceAll}
-                    onChange={(e) => setReplaceAll(e.target.checked)}
-                    className="mt-0.5 w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                  />
-                  <span className="text-sm text-slate-700">
-                    <span className="font-medium text-slate-900 block">
-                      {t("replaceAllCoursesAndControls")}
-                    </span>
-                    <span className="text-xs text-slate-500 block mt-0.5">
-                      {replaceAll
-                        ? t("replaceAllOnHint")
-                        : t("replaceAllOffHint")}
-                    </span>
-                  </span>
-                </label>
-              </div>
-
               {/* Actions */}
               <div className="flex gap-3 pt-2">
                 <button
@@ -491,8 +536,9 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                 </button>
                 <button
                   onClick={handleImport}
-                  disabled={importMutation.isPending}
-                  className="flex-1 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
+                  data-testid="course-import-submit"
+                  disabled={importMutation.isPending || modeBlockers.length > 0 || mappedTwice.length > 0}
+                  className={`flex-1 px-4 py-2.5 ${replaceAll ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 hover:bg-blue-700"} text-white text-sm font-medium rounded-lg transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2`}
                 >
                   {importMutation.isPending ? (
                     <>
@@ -501,7 +547,9 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                     </>
                   ) : (
                     <>
-                      {t("importCount", { count: preview.courses.length })}
+                      {replaceAll
+                        ? t("replaceAllImportCount", { count: preview.courses.length })
+                        : t("importCount", { count: preview.courses.length })}
                     </>
                   )}
                 </button>
@@ -529,6 +577,16 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                   {importMutation.data.classesAssigned > 0 && (
                     <p>{t("classAssignmentsMade", { count: importMutation.data.classesAssigned })}</p>
                   )}
+                  {importMutation.data.coursesRemoved.length > 0 && (
+                    <p>{t("consequence.coursesRemoved", { count: importMutation.data.coursesRemoved.length })}</p>
+                  )}
+                  {importMutation.data.coursesSkippedForked.length > 0 && (
+                    <p data-testid="course-import-skipped-forked">
+                      {t("consequence.coursesSkippedForked", { count: importMutation.data.coursesSkippedForked.length })}
+                      {": "}
+                      {importMutation.data.coursesSkippedForked.join(", ")}
+                    </p>
+                  )}
                   {importMutation.data.coordinateAlignment === "skipped" && (
                     <p data-testid="course-import-skipped-positions-note">
                       {t("positionsSkippedNote")}
@@ -549,6 +607,13 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
     </div>
   );
 }
+
+const TONE_CLASS: Record<ConsequenceTone, string> = {
+  remove: "text-red-700",
+  warn: "text-amber-700",
+  keep: "text-slate-600",
+  info: "text-slate-500",
+};
 
 function SummaryBox({ label, value, color = "slate" }: { label: string; value: number; color?: string }) {
   const colorClasses =

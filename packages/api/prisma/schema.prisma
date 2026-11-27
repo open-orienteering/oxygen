@@ -104,6 +104,10 @@ model Event {
   date            DateTime  @db.Date
   /// Deciseconds since midnight. Default 324000 = 09:00:00.
   zeroTime        Int       @default(324000) @map("zero_time")
+  /// IANA time zone of the venue; "now" and time of day are computed in it.
+  timeZone        String    @default("Europe/Stockholm") @map("time_zone")
+  /// Throwaway event the Test Lab may fill with synthetic data (API-06).
+  isTestEvent     Boolean   @default(false) @map("is_test_event")
   kind            String    @default("competition")
   /// User-defined display label when kind is "other".
   kindCustom      String    @default("") @map("kind_custom")
@@ -112,7 +116,7 @@ model Event {
   /// Timestamp of the last successful Eventor sync. NULL = never synced.
   eventorLastSync DateTime? @map("eventor_last_sync") @db.Timestamptz(6)
 
-  liveresultsTavid  Int?  @map("liveresults_tavid")
+  liveresultsTavid  Int?  @unique @map("liveresults_tavid")
   liveresultsConfig Json? @map("liveresults_config")
 
   // Organizer
@@ -719,6 +723,10 @@ model Class {
   longName  String  @default("") @map("long_name")
   courseId  String? @map("course_id") @db.Uuid
   eventorId BigInt? @map("eventor_id")
+  /// What the last Eventor import/sync stored for this class (name, sex, age
+  /// limits, no_timing, sort_index, class_type); NULL before the first sync
+  /// after the snapshot was introduced. docs/system/eventor-sync.md.
+  eventorSnapshot Json? @map("eventor_snapshot")
 
   lowAge    Int    @default(0) @map("low_age") @db.SmallInt
   highAge   Int    @default(0) @map("high_age") @db.SmallInt
@@ -818,6 +826,12 @@ model Runner {
   startTime     Int          @default(0) @map("start_time")
   finishTime    Int          @default(0) @map("finish_time")
   status        RunnerStatus @default(unknown)
+  /// Package 2 (RES-01): the status was set by hand (runner edit, status
+  /// button, bulk DNS), so a card re-read never overwrites it silently.
+  statusManual  Boolean      @default(false) @map("status_manual")
+  /// The finish time was keyed in by hand (Finish Station, runner edit);
+  /// a card without a finish punch must not erase it.
+  finishManual  Boolean      @default(false) @map("finish_manual")
 
   bib         String @default("")
   birthYear   Int    @default(0) @map("birth_year") @db.SmallInt
@@ -831,6 +845,11 @@ model Runner {
   entrySource     Int     @default(0) @map("entry_source")
   eventorPersonId BigInt? @map("eventor_person_id")
   eventorEntryId  BigInt? @map("eventor_entry_id")
+  /// What the last Eventor import/sync stored or saw for this runner (name,
+  /// card_no, class_eventor_id, club_eventor_id, club_name, birth_year, sex,
+  /// nationality, present, synced_at); NULL for a runner that predates it.
+  /// docs/system/eventor-sync.md.
+  eventorSnapshot Json?   @map("eventor_snapshot")
 
   feeCents     Int     @default(0) @map("fee_cents")
   cardFeeCents Int     @default(0) @map("card_fee_cents")
@@ -1112,10 +1131,19 @@ model JournalEntry {
   clientTimestamp DateTime @map("client_timestamp") @db.Timestamptz(6)
   payload         Json
   receivedAt      DateTime @default(now()) @map("received_at") @db.Timestamptz(6)
+  /// Local arrival order (BIGSERIAL). The shipper walks unshipped rows in
+  /// this order; the HLC order is for applying, not for delivery.
+  ingestSeq       BigInt   @default(autoincrement()) @map("ingest_seq")
+  /// When the other node last acknowledged this entry (or it came from
+  /// there). NULL = not yet delivered. The partial index
+  /// `journal_unshipped_idx (event_id, ingest_seq) WHERE pushed_at IS NULL`
+  /// lives in SQL only, as the `event_lease` partial index does.
+  pushedAt        DateTime? @map("pushed_at") @db.Timestamptz(6)
 
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
   @@index([eventId, hlc])
+  @@index([hlc])
   @@index([eventId, clientTimestamp(sort: Desc)])
   @@index([eventId, type])
   @@map("journal")
@@ -1146,8 +1174,10 @@ model EventLease {
 
 /// Per-peer journal-shipping watermarks (pivot Step 3). One row per
 /// (peer, event); cursors are (hlc, id) pairs because encoded HLCs can tie
-/// across stations. A watermark only advances after contiguous application,
-/// so it never skips past an unshipped/unapplied entry.
+/// across stations. The pushed/pulled cursors are legacy: shipping now uses
+/// `journal.pushed_at` / `journal.ingest_seq`; the cursors are read only
+/// against a peer without `events.unshipped`. The row itself marks "this
+/// event is checked out against this peer" (it scopes `shipAllOnce`).
 model JournalSyncState {
   /// Peer identifier — the normalized SYNC_PEER_URL of the peer node.
   peerId  String @map("peer_id")
@@ -1276,6 +1306,9 @@ model MapFile {
   /// OCAD file's own angle. Used when the drawing is magnetic-north-up
   /// but ScalePar declares a=0 — common for Swedish club exports.
   rotationCorrection Float    @default(0) @map("rotation_correction")
+  /// The contour interval (m) a person confirmed for this event's map; NULL = not confirmed. A map from the club library
+  /// takes the club map's value (`ClubMap.contourIntervalM`); the venue box, which has no club map row, reads this one.
+  contourIntervalM   Float?   @map("contour_interval_m")
   /// The upload-time OCAD north diagnostic. Unwritten since E5 (no OCAD
   /// parse at upload; `course.mapMetadata` reads the document report's
   /// `north`); kept for rows written before (docs/map-storage.md §4.6).
@@ -1506,6 +1539,8 @@ model ClubMap {
   colourOverrides    Json     @default("{}") @map("colour_overrides")
   northLinesBelow    Boolean  @default(true) @map("north_lines_below")
   rotationCorrection Float    @default(0) @map("rotation_correction")
+  /// The contour interval (m) a person confirmed; NULL = not confirmed (docs/course-elevation.md §0.43). Follows every event using the map.
+  contourIntervalM   Float?   @map("contour_interval_m")
   createdBy          String?  @map("created_by") @db.Uuid
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -1602,6 +1637,8 @@ model MapImportJob {
   progress     Float     @default(0) @db.Real
   claimedBy    String?   @map("claimed_by")
   heartbeatAt  DateTime? @map("heartbeat_at") @db.Timestamptz(6)
+  /// Claims so far; a stale re-claim past the limit fails the job instead (docs/map-storage.md §6.1, MAP-5).
+  attempts     Int       @default(0)
   documentHash String?   @map("document_hash")
   error        String?
   /// User whose request started the job (docs/map-storage.md §4.2); null for the backfill.

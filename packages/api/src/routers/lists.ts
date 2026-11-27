@@ -1,19 +1,13 @@
 import { z } from "zod";
 import { router, viewProcedure, resultsViewProcedure } from "../trpc.js";
-import { toAbsolute } from "../timeConvert.js";
-import { runnerStatusToValue } from "../statusConvert.js";
-import {
-  parsePunches,
-  matchPunchesToCourse,
-  type StartListEntry,
-  type ResultEntry,
-} from "@oxygen/shared";
-import { resolveCourseExpectedPositions } from "./course.js";
+import { toAbsolute, eventNowDs } from "../timeConvert.js";
+import type { StartListEntry, ResultEntry } from "@oxygen/shared";
+import { loadClassStandings, compareStandings } from "../classStandings.js";
+import { loadPunchedCardNos, progressFlags } from "../runnerProgress.js";
 
 /**
- * Start list + result list endpoints. Minimal port — sorts and presents
- * runners with their class/club context. Adjusted running time / split
- * placements are coming in a follow-up alongside the punch matcher port.
+ * Start list + result list endpoints. Cancelled entries are not on either
+ * list (docs/bugfixes/cancellation-handling.md).
  */
 export const listsRouter = router({
   startList: viewProcedure
@@ -22,6 +16,7 @@ export const listsRouter = router({
       const where: Record<string, unknown> = {
         eventId: ctx.event.id,
         removed: false,
+        status: { not: "cancel" },
       };
       if (input?.classId) {
         const cls = await ctx.db.class.findFirst({
@@ -41,15 +36,9 @@ export const listsRouter = router({
       });
       const zeroTime = ctx.event.zeroTime;
 
-      const punchCards = await ctx.db.punch.groupBy({
-        by: ["cardNo"],
-        where: { eventId: ctx.event.id, removed: false },
-      });
-      const punchSet = new Set(punchCards.map((p) => p.cardNo));
+      const punchSet = await loadPunchedCardNos(ctx.db, ctx.event.id);
 
-      const now = new Date();
-      const meosNow =
-        (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;
+      const meosNow = eventNowDs(ctx.event);
 
       return runners.map(
         (r): StartListEntry => ({
@@ -65,11 +54,7 @@ export const listsRouter = router({
           bib: r.bib,
           // The runner's variant (F6b): `H21 · AC` on the start list.
           ...(r.course?.variantKey ? { variantKey: r.course.variantKey } : {}),
-          hasPunches: (r.cardNo != null && punchSet.has(r.cardNo)) || undefined,
-          hasStarted:
-            (r.startTime > 0 &&
-              (r.startTime <= 1 ||
-                meosNow >= toAbsolute(r.startTime, zeroTime))) || undefined,
+          ...progressFlags(r, punchSet, zeroTime, meosNow),
         }),
       );
     }),
@@ -77,161 +62,43 @@ export const listsRouter = router({
   resultList: resultsViewProcedure
     .input(z.object({ classId: z.number().int().optional() }).optional())
     .query(async ({ ctx, input }): Promise<ResultEntry[]> => {
-      const where: Record<string, unknown> = {
-        eventId: ctx.event.id,
-        removed: false,
-      };
+      let classId: string | undefined;
       if (input?.classId) {
         const cls = await ctx.db.class.findFirst({
           where: { eventId: ctx.event.id, seq: input.classId },
           select: { id: true },
         });
         if (!cls) return [];
-        where.classId = cls.id;
+        classId = cls.id;
       }
-      const runners = await ctx.db.runner.findMany({
-        where,
-        include: {
-          class: { select: { name: true, seq: true, courseId: true } },
-        },
-      });
+      // Places, adjusted times and no-timing come from the one shared
+      // standings step, which the finish receipt uses too (RES-11).
+      const standings = await loadClassStandings(ctx.db, ctx.event, { classId });
+      standings.sort(compareStandings);
+
       const zeroTime = ctx.event.zeroTime;
+      const punchSet = await loadPunchedCardNos(ctx.db, ctx.event.id);
+      const meosNow = eventNowDs(ctx.event);
 
-      // Compute running-time adjustment per runner by running the
-      // matcher over each card's punches against the runner's course.
-      // This is the bulk equivalent of performReadout's adjustment step;
-      // cached per course so we don't re-resolve expectedPositions for
-      // every runner.
-      const cardNos = runners
-        .map((r) => r.cardNo)
-        .filter((c): c is number => c != null && c > 0);
-      const cards = cardNos.length
-        ? await ctx.db.card.findMany({
-            where: {
-              eventId: ctx.event.id,
-              cardNo: { in: cardNos },
-              removed: false,
-            },
-            select: { cardNo: true, punchesRaw: true },
-          })
-        : [];
-      const cardByNo = new Map<number, string>(
-        cards.map((c) => [c.cardNo, c.punchesRaw]),
+      return standings.map(
+        (s): ResultEntry => ({
+          id: s.runner.seq,
+          place: s.place,
+          name: s.runner.name,
+          clubId: s.runner.eventorClubId ? Number(s.runner.eventorClubId) : 0,
+          clubName: s.runner.clubName,
+          className: s.className,
+          classId: s.classSeq,
+          startTime: s.startAbs,
+          finishTime: s.finishAbs,
+          runningTime: s.runningTime,
+          timeBehind: s.timeBehind,
+          status: s.status,
+          startNo: s.runner.startNo,
+          ...progressFlags(s.runner, punchSet, zeroTime, meosNow),
+          ...(s.noTiming ? { noTiming: true } : {}),
+        }),
       );
-
-      const courseIds = new Set<string>();
-      for (const r of runners) {
-        const cid = r.courseId ?? r.class?.courseId ?? null;
-        if (cid) courseIds.add(cid);
-      }
-      const expectedByCourse = new Map<
-        string,
-        Awaited<ReturnType<typeof resolveCourseExpectedPositions>>
-      >();
-      const orderModeByCourse = new Map<string, "ordered" | "free_order">();
-      if (courseIds.size > 0) {
-        const courseRows = await ctx.db.course.findMany({
-          where: { id: { in: [...courseIds] } },
-          select: { id: true, orderMode: true },
-        });
-        for (const row of courseRows) {
-          orderModeByCourse.set(row.id, row.orderMode);
-        }
-      }
-      for (const cid of courseIds) {
-        expectedByCourse.set(
-          cid,
-          await resolveCourseExpectedPositions(ctx.db, cid),
-        );
-      }
-
-      const adjustmentByRunner = new Map<string, number>();
-      for (const r of runners) {
-        const courseId = r.courseId ?? r.class?.courseId ?? null;
-        const expected = courseId ? expectedByCourse.get(courseId) : null;
-        if (!expected || expected.length === 0) continue;
-        const raw = cardByNo.get(r.cardNo ?? -1);
-        if (!raw) continue;
-        const punches = parsePunches(raw);
-        for (const p of punches) {
-          if (p.time !== 0) p.time = toAbsolute(p.time, zeroTime);
-        }
-        const fallbackStart = toAbsolute(r.startTime, zeroTime);
-        const { runningTimeAdjustment } = matchPunchesToCourse(
-          punches,
-          expected,
-          fallbackStart,
-          { orderMode: orderModeByCourse.get(courseId!) ?? "ordered" },
-        );
-        if (runningTimeAdjustment > 0)
-          adjustmentByRunner.set(r.id, runningTimeAdjustment);
-      }
-
-      const enriched = runners.map((r) => {
-        const status = runnerStatusToValue(r.status);
-        const startAbs = toAbsolute(r.startTime, zeroTime);
-        const finishAbs = toAbsolute(r.finishTime, zeroTime);
-        const raw =
-          startAbs > 0 && finishAbs > 0 ? Math.max(0, finishAbs - startAbs) : 0;
-        const adj = adjustmentByRunner.get(r.id) ?? 0;
-        const runningTime = Math.max(0, raw - adj);
-        return { r, status, startAbs, finishAbs, runningTime, adj };
-      });
-
-      enriched.sort((a, b) => {
-        const aOk = a.status === 1 ? 0 : 1;
-        const bOk = b.status === 1 ? 0 : 1;
-        if (aOk !== bOk) return aOk - bOk;
-        if (aOk === 0) return a.runningTime - b.runningTime;
-        return 0;
-      });
-
-      // Compute place + timeBehind within each class.
-      const placesByClass = new Map<string, { winner: number; place: number }>();
-      const result: ResultEntry[] = [];
-      for (const e of enriched) {
-        const classKey = e.r.classId ?? "";
-        if (e.status === 1 && e.runningTime > 0) {
-          let entry = placesByClass.get(classKey);
-          if (!entry) {
-            entry = { winner: e.runningTime, place: 0 };
-            placesByClass.set(classKey, entry);
-          }
-          entry.place++;
-          result.push({
-            id: e.r.seq,
-            place: entry.place,
-            name: e.r.name,
-            clubId: e.r.eventorClubId ? Number(e.r.eventorClubId) : 0,
-            clubName: e.r.clubName,
-            className: e.r.class?.name ?? "",
-            classId: e.r.class?.seq ?? 0,
-            startTime: e.startAbs,
-            finishTime: e.finishAbs,
-            runningTime: e.runningTime,
-            timeBehind: e.runningTime - entry.winner,
-            status: e.status,
-            startNo: e.r.startNo,
-          });
-        } else {
-          result.push({
-            id: e.r.seq,
-            place: 0,
-            name: e.r.name,
-            clubId: e.r.eventorClubId ? Number(e.r.eventorClubId) : 0,
-            clubName: e.r.clubName,
-            className: e.r.class?.name ?? "",
-            classId: e.r.class?.seq ?? 0,
-            startTime: e.startAbs,
-            finishTime: e.finishAbs,
-            runningTime: 0,
-            timeBehind: 0,
-            status: e.status,
-            startNo: e.r.startNo,
-          });
-        }
-      }
-      return result;
     }),
 
   classesWithCounts: viewProcedure.query(async ({ ctx }) => {

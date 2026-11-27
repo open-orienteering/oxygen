@@ -477,28 +477,18 @@ test.describe("Courses Page", () => {
     // (before the fallback these courses had no dropdown at all).
     await expect(page.getByRole("button", { name: "— Skip —" }).first()).toBeVisible();
     // Course "E" substring-matches the seed class "Öppen 1" (normalized
-    // "öppen1" contains "e"), so its dropdown is pre-filled with the
-    // heuristic suggestion.
-    const eDropdown = page.getByRole("button", { name: "Öppen 1" });
-    await expect(eDropdown).toBeVisible();
-    // Reset it to Skip via the dropdown: later spec files rely on the
-    // seed class→course assignments, so this append import must not
-    // steal Öppen 1 from Bana 1.
-    await eDropdown.click();
-    await page
-      .getByRole("row", { name: /^E / })
-      .getByRole("button", { name: "— Skip —", exact: true })
-      .click();
+    // "öppen1" contains "e"): the guess is marked but never pre-selected,
+    // so the seed class keeps Bana 1 (course-layer.md §6.4).
+    await expect(page.getByRole("row", { name: /^E / }).getByRole("button", { name: "— Skip —", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Öppen 1" })).not.toBeVisible();
 
-    // The replace-all toggle defaults to ON; assert that, then turn it
-    // off so this test still appends to the seed data (3 + 5 = 8).
-    // Wiping the seed courses here would break later spec files that
-    // depend on Bana 2 — the destructive path is covered in the
-    // course-import integration test instead.
-    const replaceAll = page.getByTestId("course-import-replace-all");
-    await expect(replaceAll).toBeChecked();
-    await replaceAll.uncheck();
+    // Merge is the default, so this import adds to the seed data (3 + 5 = 8)
+    // and the consequence list says nothing is removed. Wiping the seed
+    // courses here would break later spec files that depend on Bana 2 —
+    // the destructive path is covered in course-import-safety.spec.ts.
+    await expect(page.getByTestId("course-import-mode-merge")).toBeChecked();
+    await expect(page.getByTestId("course-import-consequence-coursesAdded")).toContainText("Adds 5 courses");
+    await expect(page.getByTestId("course-import-consequence-coursesRemoved")).toHaveCount(0);
 
     await page.getByRole("button", { name: "Import 5 courses" }).click();
     await expect(page.getByText("Import Complete")).toBeVisible({ timeout: 15000 });
@@ -538,10 +528,7 @@ test.describe("Courses Page", () => {
 
     await expect(page.getByRole("cell", { name: "E2E Ppen", exact: true }).first()).toBeVisible();
 
-    const replaceAll = page.getByTestId("course-import-replace-all");
-    await expect(replaceAll).toBeChecked();
-    await replaceAll.uncheck();
-
+    await expect(page.getByTestId("course-import-mode-merge")).toBeChecked();
     await page.getByRole("button", { name: "Import 1 course" }).click();
     await expect(page.getByText("Import Complete")).toBeVisible({ timeout: 15000 });
     await expect(page.getByText("1 courses created")).toBeVisible();
@@ -579,7 +566,6 @@ test.describe("Courses Page", () => {
     // Dropping the unusable positions is the default for a mismatch.
     await expect(page.getByTestId("course-import-skip-positions")).toBeChecked();
 
-    await page.getByTestId("course-import-replace-all").uncheck();
     await page.getByRole("button", { name: "Import 1 course" }).click();
     await expect(page.getByText("Import Complete")).toBeVisible({ timeout: 15000 });
     await expect(

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Make the Demo Competition's map (docs/ops/demo.md, "The map"): add the
- * invented point features to the CC0 Puit de Laven map.
+ * Make the Puit de Laven test map (docs/ops/demo.md, "The map"; the Demo
+ * Competition's map until 2026-11): add the invented point features to the
+ * CC0 Puit de Laven map.
  *
  *   node scripts/inject-demo-points.mjs [in.omap] [out.omap] [seed]
  *
@@ -9,11 +10,11 @@
  * fixtures/showcase/puit-de-laven-demo.omap, seed 42. The default
  * run reproduces the committed demo map byte for byte
  * (`scripts/__tests__/demo-map.test.mjs`); after changing the seed or the
- * plan, run `node scripts/patch-showcase-map.mjs` to re-pin the fixture.
+ * plan, update its hash in scripts/lib/map-files.mjs.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { DEMO_MAP_PATH, ORIGINAL_MAP_PATH } from "./lib/showcase-map.mjs";
+import { DEMO_MAP_PATH, ORIGINAL_MAP_PATH } from "./lib/puit-de-laven.mjs";
 import { DEMO_SEED, injectDemoPoints } from "./lib/inject-demo-points.mjs";
 
 const [src = ORIGINAL_MAP_PATH, dst = DEMO_MAP_PATH, seedArg] = process.argv.slice(2);

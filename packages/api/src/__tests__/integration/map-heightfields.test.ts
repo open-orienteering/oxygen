@@ -315,7 +315,7 @@ describe("the terrain in the descriptor and the review", () => {
     const meta = await eventCaller(ctx).course.mapMetadata();
     const report = (await readHeightfield(ctx.db, demoHash))!.report!;
     // no DEM provider is enabled in tests by default (docs/map-terrain.md §7.0 answer 4)
-    expect(meta!.terrain).toEqual({ state: "ready", source: "contours", version: TERRAIN_VERSION, url: heightfieldUrl(demoHash), decided: report.share.decided, dem: { state: "disabled", reason: null, provider: null, ground: null, anchored: null } });
+    expect(meta!.terrain).toEqual({ state: "ready", source: "contours", version: TERRAIN_VERSION, url: heightfieldUrl(demoHash), decided: report.share.decided, interval: { assumedM: 5, confirmedM: null }, dem: { state: "disabled", reason: null, provider: null, ground: null, anchored: null } });
   });
 
   it("course.mapMetadata.terrain: none without contours, pending without a row", async () => {

@@ -12,6 +12,7 @@ import type { FinishReceiptData } from "../lib/receipt-printer/index.js";
 import { useLookupByCard, useRecentActivity } from "../lib/offline/projection-reads";
 import { fetchLogoRaster } from "../lib/receipt-printer/index.js";
 import { getClubLogoUrl } from "../lib/club-logo";
+import { useEventClock } from "../hooks/useEventClock";
 import { useStationSync } from "../hooks/useStationSync";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { useQueryClient } from "@tanstack/react-query";
@@ -33,9 +34,8 @@ export function FinishStation() {
   const utils = trpc.useUtils();
   const printer = usePrinter();
 
-  const serverTime = trpc.race.serverTime.useQuery(undefined, {
-    refetchInterval: 10000,
-  });
+  // The event's clock (event time zone, ticks locally, works offline).
+  const clock = useEventClock();
 
   // Competition nameId — used for projection reads + event emission.
   const nameId = window.location.pathname.match(/^\/([^/]+)/)?.[1] ?? "";
@@ -83,6 +83,7 @@ export function FinishStation() {
           punchTime: c.punchTime,
           legLength: c.legLength,
         })),
+        finish: result.finish,
         course: result.course
           ? { name: result.course.name, length: result.course.length }
           : null,
@@ -104,6 +105,9 @@ export function FinishStation() {
   );
 
   const isOnline = useOnlineStatus();
+  const busyRef = useRef(false);
+  const pendingRunnerRef = useRef<{ id: number; name: string; cardNo: number } | null>(null);
+  const [confirmReplace, setConfirmReplace] = useState(false);
   const queryClient = useQueryClient();
 
   const recordFinish = trpc.race.recordFinish.useMutation({
@@ -128,17 +132,30 @@ export function FinishStation() {
           .catch((err) => console.warn("[FinishStation] Receipt print failed:", err));
       }
     },
-    onError: (err) => {
-      // If offline, handle locally
-      if (!navigator.onLine) {
-        handleOfflineFinish();
-      } else {
-        setLastAction({
-          type: "error",
-          message: err.message,
-          time: Date.now(),
-        });
+    onError: (err, vars) => {
+      const code = (err as { data?: { code?: string } }).data?.code;
+      if (code === "CONFLICT" && err.message.startsWith("FINISH_EXISTS")) {
+        // The runner already has a finish (the cached row was stale): ask first.
+        setConfirmReplace(true);
+        return;
       }
+      // Queue on any network-class error (no server answer), with the time
+      // captured at the key press. A server answer (NOT_FOUND, auth) is shown.
+      if (code === undefined || !navigator.onLine) {
+        const runner = pendingRunnerRef.current;
+        if (runner) {
+          void handleOfflineFinish(runner, vars.finishTime ?? 0, vars.allowOverwrite === true);
+          return;
+        }
+      }
+      setLastAction({
+        type: "error",
+        message: err.message,
+        time: Date.now(),
+      });
+    },
+    onSettled: () => {
+      busyRef.current = false;
     },
   });
 
@@ -150,22 +167,41 @@ export function FinishStation() {
 
   // nameId is defined near the top (projection reads + event emission).
 
-  const handleOfflineFinish = useCallback(() => {
-    if (!lookup.data?.found) return;
-    const runner = lookup.data.runner;
-    const now = new Date();
-    const finishTime =
-      (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;
+  const handleOfflineFinish = useCallback(async (
+    runner: { id: number; name: string; cardNo: number },
+    finishTime: number,
+    overwrite: boolean,
+  ) => {
 
-    // Emit event to local queue
-    emitEvent("finish.recorded", nameId, {
-      runnerId: runner.id,
-      finishTime,
-      cardNo: runner.cardNo,
-    });
+    // Emit event to local queue. Awaited: if IndexedDB refuses the write the
+    // operator must be told, not shown a success and a receipt (SYNC-24).
+    try {
+      // A confirmed replace is an operator correction (last write wins): a
+      // runner patch, which the server marks as a hand-set finish. A first
+      // finish is `finish.recorded` (first write wins).
+      if (overwrite) {
+        await emitEvent("runner.updated", nameId, {
+          runnerId: runner.id,
+          fields: { finishTime },
+        });
+      } else {
+        await emitEvent("finish.recorded", nameId, {
+          runnerId: runner.id,
+          finishTime,
+          cardNo: runner.cardNo,
+        });
+      }
+    } catch (err) {
+      console.error("[FinishStation] Could not queue the finish", err);
+      setLastAction({ type: "error", message: t("finishNotSaved"), time: Date.now() });
+      busyRef.current = false;
+      return;
+    }
+    busyRef.current = false;
+    setConfirmReplace(false);
 
     // Compute result locally for receipt
-    const localResult = computeLocalReadout(runner.id, finishTime, queryClient);
+    const localResult = computeLocalReadout(runner.id, finishTime, queryClient, nameId);
     const runningTime = localResult?.timing.runningTime ?? 0;
 
     setLastAction({
@@ -193,10 +229,12 @@ export function FinishStation() {
           status: c.status,
           punchTime: c.punchTime,
         })),
+        finish: localResult.finish,
         course: localResult.course,
         position: localResult.position,
-        classResults: localResult.classResults.map((r, i) => ({
-          rank: i + 1,
+        // Ties share a rank (RES-11): strictly faster runners + 1.
+        classResults: localResult.classResults.map((r) => ({
+          rank: localResult.classResults.filter((o) => o.runningTime < r.runningTime).length + 1,
           name: r.name,
           clubName: "",
           runningTime: r.runningTime,
@@ -209,27 +247,36 @@ export function FinishStation() {
     }
   }, [lookup.data, nameId, queryClient, t, printer, dashboard.data, regConfig.data]);
 
-  const handleRecordFinish = () => {
-    if (!lookup.data?.found) return;
+  const handleRecordFinish = (fromButton = false) => {
+    if (!lookup.data?.found || busyRef.current || recordFinish.isPending) return;
+    const runner = lookup.data.runner;
+    // WEB-53: a runner who already has a finish needs the second step. Plain
+    // Enter is ignored; the button replaces it, with the time of this press.
+    const hasFinish = runner.finishTime > 0 || confirmReplace;
+    if (hasFinish && !fromButton) return;
+
+    // One reading of the event clock, taken at the key press, for every
+    // path below (whole seconds, like a manual stamp always was).
+    const deciseconds = Math.floor(clock.nowDs() / 10) * 10;
+    busyRef.current = true;
+    pendingRunnerRef.current = { id: runner.id, name: runner.name, cardNo: runner.cardNo };
 
     // When offline, skip the server call entirely
     if (!isOnline) {
-      handleOfflineFinish();
+      void handleOfflineFinish(pendingRunnerRef.current, deciseconds, hasFinish);
       return;
     }
 
-    const now = new Date();
-    const deciseconds =
-      (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;
     recordFinish.mutate({
-      runnerId: lookup.data.runner.id,
+      runnerId: runner.id,
       finishTime: deciseconds,
+      allowOverwrite: hasFinish,
     });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && lookup.data?.found) {
-      handleRecordFinish();
+      handleRecordFinish(false);
     }
   };
 
@@ -243,7 +290,7 @@ export function FinishStation() {
     [printer, buildReceiptData],
   );
 
-  const currentTimeDeci = serverTime.data?.deciseconds ?? 0;
+  const currentTimeDeci = clock.currentDs;
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -268,7 +315,10 @@ export function FinishStation() {
           type="number"
           inputMode="numeric"
           value={cardInput}
-          onChange={(e) => setCardInput(e.target.value)}
+          onChange={(e) => {
+            setCardInput(e.target.value);
+            setConfirmReplace(false);
+          }}
           onKeyDown={handleKeyDown}
           placeholder={t("cardNumberPlaceholder")}
           className="w-full text-3xl font-bold text-center py-4 px-6 border-2 border-slate-200 rounded-xl focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 tabular-nums"
@@ -300,11 +350,20 @@ export function FinishStation() {
                 </div>
 
                 <button
-                  onClick={handleRecordFinish}
+                  onClick={() => handleRecordFinish(true)}
                   disabled={recordFinish.isPending}
-                  className="w-full mt-4 py-4 bg-blue-600 text-white text-lg font-bold rounded-xl hover:bg-blue-700 active:bg-blue-800 transition-colors cursor-pointer disabled:opacity-50"
+                  data-testid="record-finish"
+                  className={`w-full mt-4 py-4 text-white text-lg font-bold rounded-xl transition-colors cursor-pointer disabled:opacity-50 ${
+                    lookup.data.runner.finishTime > 0 || confirmReplace
+                      ? "bg-amber-600 hover:bg-amber-700 active:bg-amber-800"
+                      : "bg-blue-600 hover:bg-blue-700 active:bg-blue-800"
+                  }`}
                 >
-                  {recordFinish.isPending ? t("recording") : t("recordFinish")}
+                  {recordFinish.isPending
+                    ? t("recording")
+                    : lookup.data.runner.finishTime > 0 || confirmReplace
+                      ? t("replaceFinish", { time: lookup.data.runner.finishTime > 0 ? formatMeosTime(lookup.data.runner.finishTime) : "" })
+                      : t("recordFinish")}
                 </button>
               </div>
             ) : (

@@ -177,6 +177,40 @@ test.describe("Rental Cards — Registration Dialog", () => {
 
     createdRunnerIds.push(created!.id);
   });
+
+  test("the rental tick does not carry to the next card-read registration (WEB-19)", async ({ page, request }) => {
+    await setCardFee(request, 50);
+    await page.addInitScript(getMockWebSerialScript());
+    await selectCompetition(page);
+    await connectMockSerialReader(page, 5000);
+    const dialog = page.getByTestId("registration-dialog");
+
+    const read = async (cardNo: number) => {
+      const resolved = waitForTrpc(page, "cardReadout.readout");
+      await page.evaluate((n) => window.__siMock.insertCard(n, []), cardNo);
+      await resolved;
+      await page.getByTestId("card-notification-view").click();
+      await expect(dialog).toBeVisible({ timeout: 5000 });
+    };
+
+    await read(2988811);
+    await dialog.locator("input[placeholder='First Last']").fill("E2E_Rental Carry A");
+    await dialog.getByTestId("reg-class").click();
+    await dialog.getByText("Öppen 2", { exact: true }).click();
+    await page.getByTestId("rental-card-checkbox").check();
+    await dialog.getByTestId("reg-submit").click();
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+
+    await page.evaluate(() => window.__siMock.removeCard());
+    await read(2988812);
+    await expect(page.getByTestId("rental-card-checkbox")).not.toBeChecked();
+
+    const listResp = await request.get(`${API_BASE}/trpc/runner.list`, { headers: COMP_HEADERS });
+    const runners = ((await listResp.json())?.result?.data ?? []) as Array<{ id: number; name: string }>;
+    const a = runners.find((r) => r.name === "E2E_Rental Carry A");
+    if (a) createdRunnerIds.push(a.id);
+    await setCardFee(request, 0);
+  });
 });
 
 test.describe("Rental Cards — Admin Runner List", () => {

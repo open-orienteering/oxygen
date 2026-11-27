@@ -19,7 +19,7 @@ import { mapDocument } from "@oxygen/shared";
 import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import { getBlob, getBlobSize, type BlobTable } from "../map-store/blob-store.js";
 import { SOURCE_SLICE_BYTES, sliceRanges } from "../map-store/source-routes.js";
-import { withoutDroppedFields } from "./dropped-columns.js";
+import { knownFields } from "./knownFields.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -255,10 +255,18 @@ export function applyTokens(rows: ReadonlyArray<Record<string, unknown>>, tokens
  * (the refresh during a lease carries none, docs/map-storage.md §7.2).
  */
 export async function exportSnapshotMaps(db: Db, eventId: bigint, opts: { decisions?: boolean } = {}): Promise<SnapshotMaps> {
-  const rows = await db.mapFile.findMany({
+  const own = await db.mapFile.findMany({
     where: { eventId },
     orderBy: { uploadedAt: "asc" },
   });
+  // The contour interval travels resolved (docs/course-elevation.md §0.43): a box has no club map row (its link is
+  // nulled below), so each file row carries the club map's value when the map follows one.
+  const versionIds = [...new Set(own.flatMap((r) => (r.clubMapVersionId ? [r.clubMapVersionId] : [])))];
+  const clubValues = new Map(
+    (await db.clubMapVersion.findMany({ where: { id: { in: versionIds } }, select: { id: true, clubMap: { select: { contourIntervalM: true } } } }))
+      .map((v) => [v.id, v.clubMap.contourIntervalM] as const),
+  );
+  const rows = own.map((r) => (r.clubMapVersionId && clubValues.has(r.clubMapVersionId) ? { ...r, contourIntervalM: clubValues.get(r.clubMapVersionId)! } : r));
   const { files, skipped } = partitionMapFiles(rows as unknown as Array<Record<string, unknown>>);
   const pinned = rows.filter((r) => r.sourceHash !== null);
   const documentHashes = [...new Set(pinned.flatMap((r) => (r.documentHash ? [r.documentHash] : [])))];
@@ -433,8 +441,9 @@ export async function createSnapshotMapFiles(
     if (!blobs.sources.has(sourceHash) && (await getBlobSize(tx, "map_sources", sourceHash)) === null) {
       throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Checkout: map source ${sourceHash} is missing on this node.` });
     }
-    // A v0.6.0 exporter still sends the columns E5 dropped.
-    const row: Record<string, unknown> = { ...withoutDroppedFields("mapFile", f), eventId, clubMapVersionId: null };
+    // A peer of another version may send columns this schema lacks (the
+    // v0.6.0 exporter's E5 columns, a newer one's additions).
+    const row: Record<string, unknown> = { ...knownFields("mapFile", f), eventId, clubMapVersionId: null };
     await tx.mapFile.create({ data: withDbNulls(row, NULLABLE_JSON_FILE_FIELDS) as never });
   }
 }

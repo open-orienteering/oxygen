@@ -3,7 +3,22 @@
  *
  * Clients push journal entries while online or offline; the outbox drains here
  * when connectivity returns. Each entry is applied idempotently — a duplicate
- * `id` is silently skipped.
+ * `id` is silently skipped — and atomically: the journal row, the table
+ * writes and any follow-up decision (a station registration's variant) are
+ * one transaction, so a crash or a failing follow-up leaves nothing half
+ * applied and the retry re-runs the whole entry.
+ *
+ * Who may push (docs/system/authentication.md "Journal push"): a peer node
+ * presenting `SYNC_SHARED_SECRET` (any entry), or a signed-in user, whose
+ * capabilities are checked per entry (`journalCapabilities.ts`). Every entry
+ * must name this request's competition (`COMPETITION_MISMATCH` otherwise),
+ * and an entry id already journaled under another event is refused
+ * (`ENTRY_IN_OTHER_EVENT`). A refusal puts the entry in `failed[]` with a
+ * stable `JournalRefusalCode`. A gate refusal (`COMPETITION_MISMATCH`,
+ * `FORBIDDEN`) or `ENTRY_IN_OTHER_EVENT` never stops the batch; an apply
+ * exception (`APPLY_FAILED`, `INVALID_PAYLOAD`, `ROW_IN_OTHER_EVENT`, i.e.
+ * `JOURNAL_BATCH_STOPPING_CODES`) does stop it (later entries stay with the
+ * sender, so last-write-wins types are never applied out of order).
  *
  * Entries are applied over Postgres via Prisma. Race-state entries resolve the
  * runner by `(eventId, cardNo)` so an offline-created runner can be matched
@@ -22,29 +37,89 @@
  */
 
 import { z } from "zod";
-import { router, eventProcedure, peerProcedure } from "../trpc.js";
-import { toRelative } from "../timeConvert.js";
+import {
+  router,
+  publicEventProcedure,
+  peerProcedure,
+  assertNodeSecret,
+  capabilitiesForContext,
+  type EventContext,
+} from "../trpc.js";
+import { TRPCError } from "@trpc/server";
+import { runWithActor } from "../auth.js";
+import { capabilitiesForEntry } from "../journalCapabilities.js";
+import { REFERENCE_ENTITIES, type ReferenceEntity } from "../referenceJournal.js";
+import { toRelative, nowMeosDate, nowMeosTime, eventTimeZone } from "../timeConvert.js";
+import { liveCardId } from "../cardLink.js";
 import {
   encodeHlc,
   decodeHlc,
   resolveHlc,
+  DAY_DS,
   cardReadIsDuplicate,
   CARD_READ_DEDUPE_WINDOW_MS,
   meosFromVolts,
+  type Capability,
   type Hlc,
+  type JournalRefusalCode,
+  type JournalBatchStoppingCode,
   type ReferenceUpsertPayload,
   type ReferenceImportedPayload,
+  type RunnerRegisteredPayload,
 } from "@oxygen/shared";
-import { storeReadoutImpl } from "./cardReadout.js";
-import { buildRunnerUpdateData } from "./runner.js";
+import { storeReadoutImpl, applyResultGuarded } from "./cardReadout.js";
+import { buildRunnerUpdateData, manualFlagsFor } from "./runner.js";
 import { appendJournal } from "../journalEmit.js";
-import { isRaceWritable } from "../sync/lease.js";
+import { getActiveLease, isRaceWritable, isStaleHolder, mayWriteEventData, writeRefusalError } from "../sync/lease.js";
 import { assignVariant } from "../variants.js";
-import { valueToRunnerStatus } from "../statusConvert.js";
+import { valueToRunnerStatus, isRunnerStatusValue } from "../statusConvert.js";
 import { foldServerHlc } from "../serverClock.js";
 import { pushToGoogleSheet } from "../sheetsBackup.js";
 import type { EventRef } from "../db.js";
-import type { PrismaClient } from "../generated/prisma/client.js";
+import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
+
+/** Refuse an entry whose runner status is not a `RunnerStatus` constant. */
+function assertRunnerStatus(type: string, status: unknown): void {
+  if (!isRunnerStatusValue(status)) {
+    throw new JournalApplyError("INVALID_PAYLOAD", `${type}: unknown runner status`);
+  }
+}
+
+/** Refuse an entry whose absolute time of day is not 0..DAY_DS-1 (RES-24). */
+function assertAbsoluteTime(type: string, field: string, value: unknown): void {
+  if (!Number.isInteger(value) || (value as number) < 0 || (value as number) >= DAY_DS) {
+    throw new JournalApplyError("INVALID_PAYLOAD", `${type}: ${field} out of range`);
+  }
+}
+
+/** Validate the status / time keys a runner patch or registration may carry; an absent or null key passes. */
+function assertRunnerPatch(type: string, fields: Record<string, unknown>): void {
+  if (fields.status !== undefined && fields.status !== null) assertRunnerStatus(type, fields.status);
+  for (const k of ["startTime", "finishTime"]) {
+    if (fields[k] !== undefined && fields[k] !== null) assertAbsoluteTime(type, k, fields[k]);
+  }
+}
+
+/** The singleton client or a `$transaction` client — appliers run on either. */
+type Db = PrismaClient | Prisma.TransactionClient;
+
+/**
+ * Thrown by an applier for an entry that can never apply on this node (a
+ * row that belongs to another event, a payload that fails validation). The
+ * `code` is what the sender sees; the message stays in the server log.
+ */
+export class JournalApplyError extends Error {
+  constructor(
+    readonly code: Extract<
+      JournalRefusalCode,
+      "ROW_IN_OTHER_EVENT" | "INVALID_PAYLOAD" | "CLASS_NOT_FOUND" | "CARD_TAKEN"
+    >,
+    message: string,
+  ) {
+    super(message);
+    this.name = "JournalApplyError";
+  }
+}
 
 const eventPayloadSchema = z.object({
   id: z.string().uuid(),
@@ -79,33 +154,112 @@ const eventPayloadSchema = z.object({
 /** A journal entry on the wire — station outbox drain and node shipping alike. */
 export type WireJournalEntry = z.infer<typeof eventPayloadSchema>;
 
+/** A refusal decided before an entry is touched (see `JournalGate`). */
+export interface JournalRefusal {
+  error: JournalRefusalCode;
+  capability?: Capability;
+}
+
+/** Per-entry admission check; null admits. */
+export type JournalGate = (entry: WireJournalEntry) => JournalRefusal | null;
+
+export interface JournalFailure {
+  id: string;
+  /** A `JournalRefusalCode`; raw exception text never leaves the server. */
+  error: JournalRefusalCode;
+  capability?: Capability;
+}
+
+export interface IngestOptions {
+  /** Admission check run before anything is written for an entry that is new to this event. */
+  gate?: JournalGate;
+  /**
+   * The part of the admission check that still applies to an id already
+   * journaled under this event (the competition check). Such an id answers
+   * `synced` without the gate, so a revoked role does not turn an entry that
+   * is already applied red on the station.
+   */
+  knownGate?: JournalGate;
+  /** Stamp this actor on every journal row instead of the wire `actorId`. */
+  actorId?: string | null;
+  /**
+   * The entries come from the peer node (its push, or this node's own pull).
+   * The journal row of an entry ingested here is created already marked
+   * delivered (`pushed_at`), so it is never shipped back; an entry this node
+   * already holds is marked the same way. A follow-up this node journals in
+   * the same transaction is its own decision and stays unmarked.
+   */
+  fromPeer?: boolean;
+  /**
+   * The entries come straight from a station's outbox (a push without the
+   * sync secret), where the operator can still act on a refusal. A station
+   * registration that cannot be stored as entered (its class is gone, its
+   * card belongs to another runner) then fails with `CLASS_NOT_FOUND` /
+   * `CARD_TAKEN` and holds the entries behind it, instead of being acked
+   * as synced and letting the runner's finish land on the card's other
+   * holder (SYNC-12). Node-to-node ingest keeps the skip: the originating
+   * node already decided, and a refusal there would wedge the shipper.
+   */
+  strict?: boolean;
+}
+
+/** Interactive-transaction limits: `reference.imported` can be hundreds of upserts. */
+const INGEST_TX_OPTIONS = { timeout: 60_000, maxWait: 10_000 } as const;
+
 /**
  * Ingest a batch of journal entries: apply each to the relational tables and
  * record it in the journal, idempotently by entry `id`. Shared by the
  * `events.push` endpoint (station outbox drain + node-to-node push) and the
  * shipper's pull path, so every ingestion route has identical semantics.
+ *
+ * Per entry: gate, idempotency (same event: synced; another event:
+ * `ENTRY_IN_OTHER_EVENT`), then ONE transaction holding the journal row, the
+ * apply and its follow-up. The journal row goes in first so two concurrent
+ * ingests of one id serialize on the primary key. Post-commit effects (the
+ * Sheets push) run after the commit.
+ *
+ * An exception stops the batch: the failed entry is reported with a stable
+ * code and the entries after it are returned in neither list (they stay
+ * pending on the sender and go out on its next round), because applying
+ * later last-write-wins entries before the failed one would flip their order
+ * on the retry.
  */
 export async function ingestJournalEntries(
   db: PrismaClient,
   event: EventRef,
   entries: WireJournalEntry[],
-): Promise<{ synced: string[]; failed: Array<{ id: string; error: string }> }> {
+  opts: IngestOptions = {},
+): Promise<{ synced: string[]; failed: JournalFailure[] }> {
   const synced: string[] = [];
-  const failed: Array<{ id: string; error: string }> = [];
+  const failed: JournalFailure[] = [];
 
   for (const entry of entries) {
     try {
-      // Idempotency check — same UUID returns success.
+      // Idempotency check — same UUID in the same event returns success,
+      // before the capability gate (the entry is already applied).
       const existing = await db.journalEntry.findUnique({
         where: { id: entry.id },
-        select: { id: true },
+        select: { eventId: true },
       });
-      if (existing) {
-        synced.push(entry.id);
+      if (existing?.eventId === event.id) {
+        const refusal = opts.knownGate?.(entry);
+        if (refusal) failed.push({ id: entry.id, ...refusal });
+        else {
+          // The peer has it, so it needs no delivery in this direction.
+          if (opts.fromPeer) await markJournalShipped(db, event.id, [entry.id]);
+          synced.push(entry.id);
+        }
         continue;
       }
-
-      const followUp = await applyEvent(db, event.id, event.zeroTime, entry);
+      const refusal = opts.gate?.(entry);
+      if (refusal) {
+        failed.push({ id: entry.id, ...refusal });
+        continue;
+      }
+      if (existing) {
+        failed.push({ id: entry.id, error: "ENTRY_IN_OTHER_EVENT" });
+        continue;
+      }
 
       const resolved = resolveHlc({
         id: entry.id,
@@ -115,26 +269,39 @@ export async function ingestJournalEntries(
       });
       // Keep the node clock ahead of everything it has seen, so
       // server-originated entries never sort behind station entries
-      // already ingested (HLC receive rule).
+      // already ingested (HLC receive rule). In memory and forward-only, so
+      // a rollback below does not need to undo it.
       foldServerHlc(resolved);
       const hlc = encodeHlc(resolved);
 
-      await db.journalEntry.create({
-        data: {
-          id: entry.id,
-          eventId: event.id,
-          type: entry.type,
-          stationId: entry.stationId,
-          actorId: entry.actorId ?? null,
-          hlc,
-          schemaVersion: entry.schemaVersion ?? 1,
-          clientTimestamp: new Date(entry.timestamp),
-          payload: entry.payload as never,
-        },
-      });
-      // A decision this node made while applying (a station registration's
-      // variant, F6b) is journaled after the entry, so it sorts behind it.
-      if (followUp) await followUp();
+      let afterCommit: ApplyOutcome["afterCommit"];
+      await db.$transaction(async (tx) => {
+        await tx.journalEntry.create({
+          data: {
+            id: entry.id,
+            eventId: event.id,
+            type: entry.type,
+            stationId: entry.stationId,
+            actorId: opts.actorId !== undefined ? opts.actorId : (entry.actorId ?? null),
+            hlc,
+            schemaVersion: entry.schemaVersion ?? 1,
+            clientTimestamp: new Date(entry.timestamp),
+            payload: entry.payload as never,
+            ...(opts.fromPeer ? { pushedAt: new Date() } : {}),
+          },
+        });
+        const outcome = await applyEvent(tx, event.id, event.zeroTime, entry, {
+          strict: opts.strict === true,
+          timeZone: eventTimeZone(event),
+        });
+        // A decision this node made while applying (a station registration's
+        // variant, F6b) is journaled after the entry, so it sorts behind it,
+        // in the same transaction: a lost follow-up is never skipped by the
+        // retry's idempotency hit.
+        if (outcome.followUp) await outcome.followUp();
+        afterCommit = outcome.afterCommit;
+      }, INGEST_TX_OPTIONS);
+      afterCommit?.(db);
 
       synced.push(entry.id);
     } catch (err) {
@@ -143,11 +310,32 @@ export async function ingestJournalEntries(
         `[events.ingest] Failed to apply entry ${entry.id} (${entry.type}):`,
         message,
       );
-      failed.push({ id: entry.id, error: message });
+      // A concurrent ingest of the same id may have committed it first (the
+      // journal primary key serialized us): that is a duplicate, not a failure.
+      const landed = await db.journalEntry
+        .findUnique({ where: { id: entry.id }, select: { eventId: true } })
+        .catch(() => null);
+      if (landed) {
+        if (landed.eventId === event.id) {
+          if (opts.fromPeer) await markJournalShipped(db, event.id, [entry.id]).catch(() => {});
+          synced.push(entry.id);
+        }
+        else failed.push({ id: entry.id, error: "ENTRY_IN_OTHER_EVENT" });
+        continue;
+      }
+      failed.push({ id: entry.id, error: failureCode(err) });
+      break;
     }
   }
 
   return { synced, failed };
+}
+
+/** What an apply exception answers; every one of these stops the batch (`JOURNAL_BATCH_STOPPING_CODES`). */
+function failureCode(err: unknown): JournalBatchStoppingCode {
+  if (err instanceof JournalApplyError) return err.code;
+  if (err instanceof Prisma.PrismaClientValidationError) return "INVALID_PAYLOAD";
+  return "APPLY_FAILED";
 }
 
 /** Cursor into an event's journal: strictly after `(hlc, id)`. */
@@ -207,17 +395,7 @@ export async function listJournalEntriesSince(
   const page = hasMore ? rows.slice(0, limit) : rows;
   const last = page.at(-1);
   return {
-    entries: page.map((r) => ({
-      id: r.id,
-      type: r.type as WireJournalEntry["type"],
-      competitionId: event.nameId,
-      stationId: r.stationId,
-      timestamp: r.clientTimestamp.getTime(),
-      hlc: decodeHlc(r.hlc),
-      schemaVersion: r.schemaVersion,
-      actorId: r.actorId,
-      payload: (r.payload ?? {}) as Record<string, unknown>,
-    })),
+    entries: page.map((r) => toWireEntry(event, r)),
     nextCursor: last
       ? { hlc: last.hlc.toString(), id: last.id }
       : { ...cursor },
@@ -225,26 +403,202 @@ export async function listJournalEntriesSince(
   };
 }
 
+type JournalRow = Awaited<ReturnType<PrismaClient["journalEntry"]["findMany"]>>[number];
+
+function toWireEntry(event: EventRef, r: JournalRow): JournalPage["entries"][number] {
+  return {
+    id: r.id,
+    type: r.type as WireJournalEntry["type"],
+    competitionId: event.nameId,
+    stationId: r.stationId,
+    timestamp: r.clientTimestamp.getTime(),
+    hlc: decodeHlc(r.hlc),
+    schemaVersion: r.schemaVersion,
+    actorId: r.actorId,
+    payload: (r.payload ?? {}) as Record<string, unknown>,
+  };
+}
+
+/**
+ * The next page of entries not yet delivered to the other node
+ * (`pushed_at IS NULL`), in this node's arrival order (`ingest_seq`). Shipping
+ * is by delivery mark, not by HLC position: an entry that arrives late with
+ * an old HLC is still unmarked, so it still ships (review MC-02).
+ */
+export async function listUnshippedJournalEntries(
+  db: PrismaClient,
+  event: EventRef,
+  limit: number,
+): Promise<{ entries: JournalPage["entries"]; hasMore: boolean }> {
+  const rows = await db.journalEntry.findMany({
+    where: { eventId: event.id, pushedAt: null },
+    orderBy: { ingestSeq: "asc" },
+    take: limit + 1,
+  });
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  return { entries: page.map((r) => toWireEntry(event, r)), hasMore };
+}
+
+/** Mark entries as delivered to the other node. Idempotent; never un-marks. */
+export async function markJournalShipped(
+  db: PrismaClient,
+  eventId: bigint,
+  ids: string[],
+): Promise<number> {
+  if (ids.length === 0) return 0;
+  const res = await db.journalEntry.updateMany({
+    where: { eventId, id: { in: ids }, pushedAt: null },
+    data: { pushedAt: new Date() },
+  });
+  return res.count;
+}
+
+const warnedRefusals = new Set<string>();
+
+/** Test seam: warn again. */
+export function _resetDeliveryRefusalWarnings(): void {
+  warnedRefusals.clear();
+}
+
+/**
+ * The delivery mark is one bit per entry, not per peer, so only the node the
+ * entries are meant for may consume them: the holder of the event's active
+ * lease. A powered-on box that no longer holds the event (checked in, taken
+ * over) must not pull and ack what the current holder is waiting for. Fails
+ * closed: `unshipped` and `ackShipped` are as new as the `x-oxygen-node-id`
+ * header (an older box pulls through read-only `since`), so a caller that
+ * names no node, or not the holder, is refused. Without an active lease
+ * nobody takes delivery. A refusal is warned once per (event, node).
+ */
+async function peerIsDeliveryTarget(
+  db: PrismaClient,
+  event: EventRef,
+  peerNodeId: string | null | undefined,
+): Promise<boolean> {
+  const lease = await getActiveLease(db, event.id);
+  if (lease && peerNodeId && peerNodeId === lease.holderNodeId) return true;
+  const key = `${event.id}:${peerNodeId ?? ""}`;
+  if (!warnedRefusals.has(key)) {
+    warnedRefusals.add(key);
+    console.warn(
+      `[events] node "${peerNodeId ?? "(no node id)"}" pulled "${event.nameId}" but is not the lease holder (${lease ? `"${lease.holderNodeId}"` : "no active lease"}): refused.`,
+    );
+  }
+  return false;
+}
+
 export const eventsRouter = router({
-  push: eventProcedure
+  /**
+   * Journal ingestion sink. Not an `eventProcedure`: it authenticates itself.
+   *   1. A presented node secret is checked first: wrong → UNAUTHORIZED, no
+   *      `SYNC_SHARED_SECRET` on this node → PRECONDITION_FAILED. A valid one
+   *      is a peer node (the venue box shipping to the cloud): any entry type,
+   *      no user.
+   *   2. Otherwise, with auth on, a signed-in user is required (a kiosk key
+   *      alone stays display-only, decision D11) and each entry needs the
+   *      capabilities `capabilitiesForEntry` names; a missing one puts that entry
+   *      in `failed[]` as `FORBIDDEN` and the rest still apply. With auth off
+   *      every capability is held.
+   * Both paths refuse an entry whose `competitionId` is not this request's
+   * event. Not lease-guarded: it must accept shipped/drained entries on every
+   * node.
+   */
+  push: publicEventProcedure
     .input(z.object({ events: z.array(eventPayloadSchema) }))
     .mutation(async ({ ctx, input }) => {
-      const { synced, failed } = await ingestJournalEntries(
-        ctx.db,
-        ctx.event,
-        input.events,
+      const ectx = ctx as EventContext;
+      const nameId = ectx.event.nameId;
+      const wrongCompetition: JournalGate = (e) =>
+        e.competitionId !== nameId ? { error: "COMPETITION_MISMATCH" } : null;
+
+      let gate: JournalGate = wrongCompetition;
+      let actorId: string | null | undefined;
+      let actor: string | null = null;
+
+      let staleHolder = false;
+      // Whether the entries of a peer push are marked delivered (`pushed_at`):
+      // only when the pusher is the active holder (the other node then has
+      // them) or nobody holds the event. A stale box's backlog stays unmarked
+      // so the current holder pulls it.
+      let markDelivered = false;
+      if (ectx.syncSecret) {
+        assertNodeSecret(ectx.syncSecret);
+        staleHolder = await isStaleHolder(ectx.db, ectx.event.id, ectx.peerNodeId);
+        const active = await getActiveLease(ectx.db, ectx.event.id);
+        markDelivered = !active || (!!ectx.peerNodeId && active.holderNodeId === ectx.peerNodeId);
+      } else {
+        // A copy that handed the event back (or lost it to a takeover) is no
+        // longer where race data is written: refuse the whole request so the
+        // station keeps its outbox and drains to the cloud once repointed.
+        // `held-elsewhere` is not refused: the holder's copy is elsewhere,
+        // but this sink must still take entries (the shipper relays them).
+        const verdict = await mayWriteEventData(ectx.db, ectx.event.id);
+        if (!verdict.ok && verdict.reason !== "held-elsewhere") throw writeRefusalError(verdict);
+        if (ectx.authEnabled && !ectx.user) {
+          throw new TRPCError({ code: "UNAUTHORIZED", message: "Not authenticated" });
+        }
+        actor = ectx.user?.id ?? null;
+        // The audit column must be trustworthy: with auth on, the signed-in
+        // user is the actor, whatever the wire says.
+        if (ectx.authEnabled) actorId = actor;
+        if (input.events.length > 0) {
+          const caps = await capabilitiesForContext(ectx);
+          gate = (e) => {
+            const mismatch = wrongCompetition(e);
+            if (mismatch) return mismatch;
+            const needed = capabilitiesForEntry(e);
+            if (!needed) return { error: "FORBIDDEN" };
+            const missing = needed.find((c) => !caps.has(c));
+            return missing ? { error: "FORBIDDEN", capability: missing } : null;
+          };
+        }
+      }
+
+      // Entries a force-taken-over holder delivers late are applied (the
+      // journal is the record), but each one is named: a correction made
+      // after the takeover can be overwritten by its older value.
+      const alreadyHeld = staleHolder
+        ? new Set(
+            (
+              await ectx.db.journalEntry.findMany({
+                where: { id: { in: input.events.map((e) => e.id) } },
+                select: { id: true },
+              })
+            ).map((r) => r.id),
+          )
+        : null;
+
+      const { synced, failed } = await runWithActor(actor, () =>
+        ingestJournalEntries(ectx.db, ectx.event, input.events, {
+          gate,
+          knownGate: wrongCompetition,
+          actorId,
+          // A push by the holder (or with no holder): the entries are already at the peer.
+          fromPeer: markDelivered ? true : undefined,
+          // A station's own outbox: refusals reach the operator.
+          strict: !ectx.syncSecret,
+        }),
       );
+      if (alreadyHeld) {
+        const byId = new Map(input.events.map((e) => [e.id, e]));
+        for (const id of synced) {
+          if (alreadyHeld.has(id)) continue;
+          console.warn(
+            `[lease] stale-holder entry ${id} ${byId.get(id)?.type ?? "?"} applied after force takeover (from node "${ectx.peerNodeId}")`,
+          );
+        }
+      }
       // serverTimeMs lets the client detect a skewed local clock (see the
       // clock-skew banner). It is the cloud's wall clock at response time.
       return { synced, failed, serverTimeMs: Date.now() };
     }),
 
   /**
-   * Node-to-node paginated journal pull (pivot Step 3). The venue's shipper
-   * calls this on the cloud to fetch entries it doesn't have (e.g. ROC
-   * punches ingested at the cloud during a lease) — and vice versa when the
-   * cloud is configured to dial a venue. Guarded by the shared sync secret;
-   * stations never call this.
+   * Node-to-node paginated journal pull by `(hlc, id)` position. Read-only
+   * (marks nothing), kept for a venue box older than `unshipped`, which
+   * dials the cloud (the cloud never dials a venue). Guarded by the shared
+   * sync secret; stations never call this.
    */
   since: peerProcedure
     .input(
@@ -261,6 +615,35 @@ export const eventsRouter = router({
         { hlc: input.afterHlc, id: input.afterId },
         input.limit,
       );
+    }),
+
+  /**
+   * Node-to-node pull by delivery mark: the next page of entries this node
+   * has not yet delivered to its peer, in arrival order. The peer applies
+   * them, then confirms with `ackShipped`. Replaces `since` for a peer that
+   * knows it (`since` stays for an older box).
+   */
+  unshipped: peerProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(500).default(200) }))
+    .query(async ({ ctx, input }) => {
+      if (!(await peerIsDeliveryTarget(ctx.db, ctx.event, ctx.peerNodeId))) {
+        return { entries: [], hasMore: false };
+      }
+      return listUnshippedJournalEntries(ctx.db, ctx.event, input.limit);
+    }),
+
+  /** The peer applied these entries: mark them delivered so `unshipped` stops offering them. */
+  ackShipped: peerProcedure
+    .input(z.object({ ids: z.array(z.string().uuid()).max(500) }))
+    .mutation(async ({ ctx, input }) => {
+      if (!(await peerIsDeliveryTarget(ctx.db, ctx.event, ctx.peerNodeId))) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the node that holds the event's lease takes delivery of its entries.",
+        });
+      }
+      const marked = await markJournalShipped(ctx.db, ctx.event.id, input.ids);
+      return { marked };
     }),
 });
 
@@ -280,10 +663,10 @@ interface OfflineEvent {
  * entries. Returns the active (non-removed) runner, or null.
  */
 async function resolveRunner(
-  db: PrismaClient,
+  db: Db,
   eventId: bigint,
   payload: Record<string, unknown>,
-): Promise<{ id: string; finishTime: number } | null> {
+): Promise<{ id: string; finishTime: number; status: string } | null> {
   const cardNo =
     typeof payload.cardNo === "number" && payload.cardNo > 0
       ? payload.cardNo
@@ -291,7 +674,7 @@ async function resolveRunner(
   if (cardNo != null) {
     const byCard = await db.runner.findFirst({
       where: { eventId, cardNo, removed: false },
-      select: { id: true, finishTime: true },
+      select: { id: true, finishTime: true, status: true },
     });
     if (byCard) return byCard;
   }
@@ -303,54 +686,79 @@ async function resolveRunner(
   if (seq != null) {
     return db.runner.findFirst({
       where: { eventId, seq, removed: false },
-      select: { id: true, finishTime: true },
+      select: { id: true, finishTime: true, status: true },
     });
   }
 
   return null;
 }
 
-/** Work an apply leaves for after the ingested entry is journaled. */
+/** Names compared for the registration duplicate rule: spacing and case folded, accents kept. */
+function normalizeRunnerName(name: string): string {
+  return name.normalize("NFC").trim().replace(/\s+/g, " ").toLocaleLowerCase("sv");
+}
+
+/** Work an apply leaves for after the ingested entry is journaled (same transaction). */
 type FollowUp = () => Promise<void>;
+
+/** What `applyEvent` hands back to the ingest loop. */
+interface ApplyOutcome {
+  /** Runs inside the entry's transaction, after the journal row. */
+  followUp?: FollowUp;
+  /** Runs after the entry's transaction committed, with the singleton client. */
+  afterCommit?: (root: PrismaClient) => void;
+}
 
 /**
  * The variant of a runner a station entry left without one (F6b): the
  * writing node deals the least-populated variant of her class's pool and
  * journals the pick as `runner.updated { courseId }` after the entry, so
  * every peer converges on it; a follower during a lease deals nothing —
- * the leaseholder's entry follows (the single-allocator rule). The pick
- * and its entry are one transaction, run after the ingested entry is
- * journaled: a crash in between leaves no unjournaled pick.
+ * the leaseholder's entry follows (the single-allocator rule). The follow-up
+ * runs on the ingested entry's own transaction, after its journal row: the
+ * entry, the runner, the pick and its journal entry commit together or not
+ * at all, so a crash or a failure in between leaves nothing to repair.
  */
 async function dealVariantFollowUp(
-  db: PrismaClient,
+  db: Db,
   eventId: bigint,
   runnerId: string,
   classId: string | null,
-): Promise<FollowUp | undefined> {
-  if (!classId || !(await isRaceWritable(db, eventId))) return undefined;
-  return () =>
-    db.$transaction(async (tx) => {
-      const v = await assignVariant(tx, classId, runnerId);
+): Promise<ApplyOutcome> {
+  if (!classId || !(await isRaceWritable(db, eventId))) return {};
+  return {
+    followUp: async () => {
+      const v = await assignVariant(db, classId, runnerId);
       if (!v) return;
-      const r = await tx.runner.findUniqueOrThrow({ where: { id: runnerId }, select: { seq: true, cardNo: true } });
-      await appendJournal(tx, {
+      const r = await db.runner.findUniqueOrThrow({ where: { id: runnerId }, select: { seq: true, cardNo: true } });
+      await appendJournal(db, {
         eventId,
         type: "runner.updated",
         payload: { cardNo: r.cardNo, runnerId: r.seq, fields: { courseId: v.seq } },
       });
-    });
+    },
+  };
 }
 
 async function applyEvent(
-  db: PrismaClient,
+  db: Db,
   eventId: bigint,
   zeroTime: number,
   event: OfflineEvent,
-): Promise<FollowUp | undefined> {
+  opts: { strict: boolean; timeZone?: string } = { strict: false },
+): Promise<ApplyOutcome> {
+  // The status / time checks (RES-24) are for a station's own outbox only. An
+  // entry a peer ships was accepted by its origin, possibly an older release
+  // without them: refusing it here would block that event's whole shipping
+  // stream (sync/shipper.ts), so the peer path applies it as before.
+  const check = opts.strict
+    ? { status: assertRunnerStatus, time: assertAbsoluteTime, patch: assertRunnerPatch }
+    : { status: () => {}, time: () => {}, patch: () => {} };
   switch (event.type) {
     case "finish.recorded": {
-      const { finishTime } = event.payload as { finishTime: number };
+      const { finishTime, status } = event.payload as { finishTime: number; status?: number | null };
+      check.time("finish.recorded", "finishTime", finishTime);
+      if (status != null) check.status("finish.recorded", status);
       const runner = await resolveRunner(db, eventId, event.payload);
       // First non-zero finish wins (a runner crosses the line once).
       if (runner && runner.finishTime === 0) {
@@ -358,7 +766,9 @@ async function applyEvent(
           where: { id: runner.id },
           data: {
             finishTime: toRelative(finishTime, zeroTime),
-            status: "ok",
+            // A DQ or a hand-set status is never turned into OK by a finish.
+            ...(runner.status === "unknown" ? { status: "ok" as const } : {}),
+            finishManual: true,
           },
         });
       }
@@ -371,15 +781,20 @@ async function applyEvent(
       // "apply unconditionally" is the LWW rule at this arrival point.
       const { finishTime, status } = event.payload as {
         finishTime: number;
-        status?: number;
+        status?: number | null;
       };
+      // A queued entry is refused like a live call would be (RES-24): an
+      // unknown status or an out-of-day time is never written.
+      check.time("finish.adjusted", "finishTime", finishTime);
+      if (status != null) check.status("finish.adjusted", status);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
         await db.runner.update({
           where: { id: runner.id },
           data: {
             finishTime: finishTime > 0 ? toRelative(finishTime, zeroTime) : 0,
-            ...(typeof status === "number"
+            finishManual: finishTime > 0,
+            ...(typeof status === "number" && runner.status !== "dq"
               ? { status: valueToRunnerStatus(status) }
               : {}),
           },
@@ -389,34 +804,36 @@ async function applyEvent(
     }
 
     case "result.applied": {
-      const { status, finishTime, startTime } = event.payload as {
+      const { status, finishTime, startTime, confirmed } = event.payload as {
         status: number;
         finishTime: number;
         startTime: number;
+        confirmed?: boolean;
       };
+      check.status("result.applied", status);
+      check.time("result.applied", "finishTime", finishTime);
+      check.time("result.applied", "startTime", startTime);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
-        await db.runner.update({
-          where: { id: runner.id },
-          data: {
-            finishTime: toRelative(finishTime, zeroTime),
-            startTime: toRelative(startTime, zeroTime),
-            status:
-              status === 1
-                ? "ok"
-                : status === 3
-                  ? "missing_punch"
-                  : status === 4
-                    ? "dnf"
-                    : "unknown",
-          },
-        });
+        // Same guard as a live apply (RES-01): a queued result never
+        // overwrites a DQ or a hand-set result, and a worse read waits for
+        // the operator unless the entry says it was confirmed. The entry is
+        // already in the journal, so nothing is re-journaled here.
+        await applyResultGuarded(
+          db,
+          eventId,
+          zeroTime,
+          runner.id,
+          { status, finishTime, startTime, confirmed: confirmed === true },
+          { journal: false },
+        );
       }
       break;
     }
 
     case "start.recorded": {
       const { startTime } = event.payload as { startTime: number };
+      check.time("start.recorded", "startTime", startTime);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
         await db.runner.update({
@@ -429,13 +846,18 @@ async function applyEvent(
 
     case "start.adjusted": {
       // Draw / manual start-time set — last-write-wins.
-      const { startTime } = event.payload as { startTime: number };
+      const { startTime, startNo } = event.payload as { startTime: number; startNo?: unknown };
+      check.time("start.adjusted", "startTime", startTime);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
         await db.runner.update({
           where: { id: runner.id },
           data: {
             startTime: startTime > 0 ? toRelative(startTime, zeroTime) : 0,
+            // Draws carry the start number (RES-17); older entries don't.
+            ...(typeof startNo === "number" && Number.isInteger(startNo) && startNo >= 0
+              ? { startNo }
+              : {}),
           },
         });
       }
@@ -443,27 +865,8 @@ async function applyEvent(
     }
 
     case "runner.registered": {
-      const {
-        tempId,
-        seq,
-        name,
-        classId,
-        eventorClubId,
-        clubName,
-        cardNo,
-        startTime,
-        courseId,
-      } = event.payload as {
-        tempId?: string;
-        seq?: number;
-        name: string;
-        classId: number;
-        eventorClubId?: number;
-        clubName?: string;
-        cardNo?: number;
-        startTime?: number;
-        courseId?: number | null;
-      };
+      const p = event.payload as Partial<RunnerRegisteredPayload> & { cardNo?: number | null };
+      const { tempId, seq, name, classId, eventorClubId, clubName, cardNo, startTime, courseId } = p;
       // 0 (legacy sentinel) or absent → NULL (no card).
       const card = typeof cardNo === "number" && cardNo > 0 ? cardNo : null;
       // Dedupe: same row UUID (shipped twice / echoed), then by
@@ -475,51 +878,114 @@ async function applyEvent(
       const byId = rowId
         ? await db.runner.findUnique({
             where: { id: rowId },
-            select: { id: true },
+            select: { id: true, eventId: true },
           })
         : null;
+      // A row id that belongs to another event is not a duplicate of ours.
+      if (byId && byId.eventId !== eventId) {
+        throw new JournalApplyError(
+          "ROW_IN_OTHER_EVENT",
+          `runner.registered: runner ${rowId} belongs to another event`,
+        );
+      }
+      if (byId) break;
       const byCard =
-        !byId && card != null
+        card != null
           ? await db.runner.findFirst({
               where: { eventId, cardNo: card, removed: false },
+              select: { id: true, name: true },
+            })
+          : null;
+      if (byCard) {
+        // The same person registered twice (two desks, or a retried
+        // registration under a new id) is a duplicate. Another runner on
+        // the card is a refusal on a station push: acking it would hand
+        // this entrant's finish and readout to the card's holder.
+        if (opts.strict && normalizeRunnerName(byCard.name) !== normalizeRunnerName(name ?? "")) {
+          throw new JournalApplyError(
+            "CARD_TAKEN",
+            `runner.registered: card ${card} already belongs to runner ${byCard.id}`,
+          );
+        }
+        if (normalizeRunnerName(byCard.name) !== normalizeRunnerName(name ?? "")) {
+          console.warn(
+            `[events.ingest] runner.registered ${event.id}: card ${card} already belongs to runner ${byCard.id}; registration skipped`,
+          );
+        }
+        break;
+      }
+      const cls =
+        typeof classId === "number"
+          ? await db.class.findFirst({
+              where: { eventId, seq: classId, removed: false },
               select: { id: true },
             })
           : null;
-      if (!byId && !byCard) {
-        const cls = await db.class.findFirst({
-          where: { eventId, seq: classId, removed: false },
-          select: { id: true },
-        });
-        if (cls) {
-          // Reuse the originating node's UUID and seq so the row is
-          // identical on every node. The allocate_event_seq() trigger
-          // honors an explicit seq and never re-allocates it; entries
-          // without one (legacy stations) let the trigger mint.
-          // The originating node's variant (F6b) as given; a station
-          // entry carries none and is dealt one here.
-          const course =
-            typeof courseId === "number"
-              ? await db.course.findFirst({ where: { eventId, seq: courseId }, select: { id: true } })
-              : null;
-          const created = await db.runner.create({
-            data: {
-              ...(rowId ? { id: rowId } : {}),
-              ...(typeof seq === "number" && seq > 0 ? { seq } : {}),
-              eventId,
-              name,
-              classId: cls.id,
-              clubName: clubName ?? "",
-              eventorClubId: eventorClubId ?? null,
-              cardNo: card,
-              startTime: startTime ? toRelative(startTime, zeroTime) : 0,
-              ...(course ? { courseId: course.id } : {}),
-            },
-            select: { id: true },
-          });
-          if (!("courseId" in event.payload)) {
-            return dealVariantFollowUp(db, eventId, created.id, cls.id);
-          }
+      if (!cls) {
+        if (opts.strict) {
+          throw new JournalApplyError(
+            "CLASS_NOT_FOUND",
+            `runner.registered: class ${String(classId)} is not in the event`,
+          );
         }
+        console.warn(
+          `[events.ingest] runner.registered ${event.id}: class ${String(classId)} is not in the event; registration skipped`,
+        );
+        break;
+      }
+      // Reuse the originating node's UUID and seq so the row is
+      // identical on every node. The allocate_event_seq() trigger
+      // honors an explicit seq and never re-allocates it; entries
+      // without one (legacy stations) let the trigger mint.
+      // The originating node's variant (F6b) as given; a station
+      // entry carries none and is dealt one here.
+      const course =
+        typeof courseId === "number"
+          ? await db.course.findFirst({ where: { eventId, seq: courseId }, select: { id: true } })
+          : null;
+      const int = (v: unknown): number | undefined =>
+        typeof v === "number" && Number.isInteger(v) ? v : undefined;
+      const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+      check.patch("runner.registered", p as Record<string, unknown>);
+      const status = int(p.status);
+      const finish = int(p.finishTime);
+      const created = await db.runner.create({
+        data: {
+          ...(rowId ? { id: rowId } : {}),
+          ...(typeof seq === "number" && seq > 0 ? { seq } : {}),
+          eventId,
+          name: name ?? "",
+          classId: cls.id,
+          clubName: clubName ?? "",
+          eventorClubId: eventorClubId ?? null,
+          cardNo: card,
+          // The card row for this number, when one was already read in
+          // the event (API-11: cardId follows cardNo).
+          cardId: card != null ? await liveCardId(db, eventId, card) : null,
+          startTime: startTime ? toRelative(startTime, zeroTime) : 0,
+          ...(course ? { courseId: course.id } : {}),
+          // The rest of the entry form (SYNC-12); absent keys keep the defaults.
+          ...(int(p.startNo) !== undefined && int(p.startNo)! >= 0 ? { startNo: int(p.startNo) } : {}),
+          ...(int(p.birthYear) !== undefined ? { birthYear: int(p.birthYear) } : {}),
+          ...(str(p.sex) !== undefined ? { sex: str(p.sex) } : {}),
+          ...(str(p.nationality) !== undefined ? { nationality: str(p.nationality) } : {}),
+          ...(str(p.phone) !== undefined ? { phone: str(p.phone) } : {}),
+          ...(int(p.fee) !== undefined ? { feeCents: int(p.fee) } : {}),
+          ...(int(p.paid) !== undefined ? { paidCents: int(p.paid) } : {}),
+          ...(int(p.payMode) !== undefined ? { payMode: int(p.payMode) } : {}),
+          ...(int(p.cardFee) !== undefined ? { cardFeeCents: int(p.cardFee) } : {}),
+          // Entry date/time: as stamped by the registering node; a station
+          // entry has none, so it is stamped from when it was registered
+          // (the entry's client timestamp), in the event's time zone.
+          entryDate: int(p.entryDate) ?? nowMeosDate(new Date(event.timestamp), opts.timeZone),
+          entryTime: int(p.entryTime) ?? nowMeosTime(new Date(event.timestamp), opts.timeZone),
+          ...(status !== undefined ? { status: valueToRunnerStatus(status) } : {}),
+          ...(finish !== undefined ? { finishTime: finish > 0 ? toRelative(finish, zeroTime) : finish } : {}),
+        },
+        select: { id: true },
+      });
+      if (!("courseId" in event.payload)) {
+        return dealVariantFollowUp(db, eventId, created.id, cls.id);
       }
       break;
     }
@@ -533,6 +999,7 @@ async function applyEvent(
       const { fields } = event.payload as {
         fields?: Record<string, unknown>;
       };
+      if (fields) check.patch("runner.updated", fields);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner && fields && Object.keys(fields).length > 0) {
         const data = await buildRunnerUpdateData(
@@ -545,6 +1012,7 @@ async function applyEvent(
         // the variant and deals one of the new class's pool (F6b);
         // server-emitted class changes always carry the pick.
         const before = await db.runner.findUniqueOrThrow({ where: { id: runner.id }, select: { classId: true } });
+        Object.assign(data, manualFlagsFor(fields, zeroTime, await db.runner.findUniqueOrThrow({ where: { id: runner.id }, select: { status: true, finishTime: true } })));
         const classChanged = data.classId !== undefined && data.classId !== before.classId;
         if (classChanged && !("courseId" in fields)) data.courseId = null;
         if (Object.keys(data).length > 0) {
@@ -569,12 +1037,22 @@ async function applyEvent(
     }
 
     case "punch.recorded": {
-      const { id, cardNo, controlCode, time } = event.payload as {
+      const { id, cardNo, controlCode, time, origin, pushedFrom, backupRow } = event.payload as {
         id?: string;
         cardNo: number;
         controlCode: number;
         time: number;
+        origin?: string;
+        pushedFrom?: string;
+        backupRow?: boolean;
       };
+      // An imported backup-memory row (`backupRow: true`) stays evidence on
+      // every node; its pushed mirror (`pushedFrom`) is a `manual` punch and
+      // flips the backup row (RES-08). An entry from an older node carries
+      // neither and lands as a live punch, as it always did.
+      const pushedFromId =
+        typeof pushedFrom === "string" && UUID_RE.test(pushedFrom) ? pushedFrom : null;
+      const isBackupRow = origin === "backup_memory" && backupRow === true && !pushedFromId;
       // Journal entries cross node boundaries — validate before the dedupe
       // lookup, where an undefined field would silently drop the filter.
       if (
@@ -582,7 +1060,7 @@ async function applyEvent(
         typeof controlCode !== "number" ||
         typeof time !== "number"
       ) {
-        throw new Error("punch.recorded: malformed payload");
+        throw new JournalApplyError("INVALID_PAYLOAD", "punch.recorded: malformed payload");
       }
       const rowId = typeof id === "string" && UUID_RE.test(id) ? id : null;
       // Dedupe: by origin row UUID first, then the grow-only-set key
@@ -594,9 +1072,18 @@ async function applyEvent(
       const byId = rowId
         ? await db.punch.findUnique({
             where: { id: rowId },
-            select: { id: true },
+            select: { id: true, eventId: true },
           })
         : null;
+      if (byId && byId.eventId !== eventId) {
+        throw new JournalApplyError(
+          "ROW_IN_OTHER_EVENT",
+          `punch.recorded: punch ${rowId} belongs to another event`,
+        );
+      }
+      // The key dedupe compares like with like: a backup row against backup
+      // rows, a live punch against live punches (a mirror shares its key
+      // with the backup row it mirrors).
       const dup =
         byId ??
         (await db.punch.findFirst({
@@ -606,9 +1093,16 @@ async function applyEvent(
             controlCode,
             time: relTime,
             removed: false,
+            source: isBackupRow ? "backup_memory" : { not: "backup_memory" },
           },
           select: { id: true },
         }));
+      if (pushedFromId) {
+        await db.punch.updateMany({
+          where: { id: pushedFromId, eventId, source: "backup_memory" },
+          data: { isOriginal: false },
+        });
+      }
       if (!dup) {
         // The origin row UUID is inserted verbatim so later punch edits
         // (`punch.removed` / `punch.updated`) address the same row on
@@ -620,7 +1114,7 @@ async function applyEvent(
             cardNo,
             controlCode,
             time: relTime,
-            source: "card",
+            source: isBackupRow ? "backup_memory" : pushedFromId ? "manual" : "card",
           },
         });
       }
@@ -789,12 +1283,14 @@ async function applyEvent(
         stationId: event.stationId,
         readAt: new Date(readMs).toISOString(),
       });
-      // Applied outside a transaction here (per-entry ingest), so the
-      // fire-and-forget Sheets push is safe.
-      pushToGoogleSheet(db, eventId, result.sheetRow);
-      break;
+      // A fire-and-forget fetch must never run on the transaction client
+      // (cardReadout.ts): push after the entry's transaction commits.
+      return {
+        afterCommit: (root) => pushToGoogleSheet(root, eventId, result.sheetRow),
+      };
     }
   }
+  return {};
 }
 
 // ─── Apply helpers ───────────────────────────────────────────
@@ -809,7 +1305,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * applies verbatim, later entries can still land".
  */
 async function resolvePunch(
-  db: PrismaClient,
+  db: Db,
   eventId: bigint,
   zeroTime: number,
   ref: { id?: string; cardNo: number; controlCode: number; time: number },
@@ -833,28 +1329,96 @@ async function resolvePunch(
   });
 }
 
+/** Unknown `fields` keys already logged, so a newer peer does not flood the log. */
+const loggedUnknownKeys = new Set<string>();
+
 /**
  * Apply a reference-entity upsert (class / course / control): LWW on the
  * full portable row, keyed by the shared UUID; the per-event `seq` is
  * inserted explicitly on first apply (the allocate_event_seq() trigger
  * honors it). Child link tables (course_controls, class_course_pools) are
  * replaced wholesale from the payload.
+ *
+ * Runs on the entry's transaction, so a failing child insert rolls the whole
+ * entry back. The payload is untrusted (it crosses node and station
+ * boundaries):
+ *   - a row id that exists in another event is refused (`ROW_IN_OTHER_EVENT`);
+ *     UUIDs are shared across nodes but a row belongs to exactly one event;
+ *   - `fields` is filtered through the entity's allow-list
+ *     (`REFERENCE_ENTITIES`): `eventId`, `seq`, `id` and the timestamps can
+ *     never be set from it, and an unknown key is dropped and logged once
+ *     (a newer peer with an extra column must not block shipping);
+ *   - every row the payload points at (course controls, pool courses, finish
+ *     control, parent course, class course) must belong to this event
+ *     (`INVALID_PAYLOAD`).
  */
 async function applyReferenceUpsert(
-  db: PrismaClient,
+  db: Db,
   eventId: bigint,
   type: "class.upserted" | "course.upserted" | "control.upserted",
   payload: ReferenceUpsertPayload,
 ): Promise<void> {
-  if (!UUID_RE.test(payload.id)) {
-    throw new Error(`${type}: malformed row id`);
+  if (typeof payload?.id !== "string" || !UUID_RE.test(payload.id)) {
+    throw new JournalApplyError("INVALID_PAYLOAD", `${type}: malformed row id`);
   }
-  const fields = { ...(payload.fields ?? {}) } as Record<string, never>;
-  // The version token travels as a decimal string (BigInt is not JSON).
-  const version = (fields as Record<string, unknown>).version;
-  if (typeof version === "string" && /^\d+$/.test(version)) {
-    (fields as Record<string, unknown>).version = BigInt(version);
+  if (typeof payload.seq !== "number") {
+    throw new JournalApplyError("INVALID_PAYLOAD", `${type}: malformed seq`);
   }
+  const rawFields = payload.fields ?? {};
+  if (typeof rawFields !== "object" || Array.isArray(rawFields)) {
+    throw new JournalApplyError("INVALID_PAYLOAD", `${type}: malformed fields`);
+  }
+  const entity: ReferenceEntity = type.slice(0, type.indexOf(".")) as ReferenceEntity;
+  const rule = REFERENCE_ENTITIES[entity];
+
+  // 1. The row, if it exists, must be ours.
+  const existing =
+    entity === "control"
+      ? await db.control.findUnique({ where: { id: payload.id }, select: { eventId: true } })
+      : entity === "course"
+        ? await db.course.findUnique({ where: { id: payload.id }, select: { eventId: true } })
+        : await db.class.findUnique({ where: { id: payload.id }, select: { eventId: true } });
+  if (existing && existing.eventId !== eventId) {
+    throw new JournalApplyError(
+      "ROW_IN_OTHER_EVENT",
+      `${type}: ${payload.id} belongs to another event`,
+    );
+  }
+
+  // 2. Allow-listed, typed columns only.
+  const fields: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(rawFields)) {
+    if (!rule.fields.has(key)) {
+      const logKey = `${entity}.${key}`;
+      if (!loggedUnknownKeys.has(logKey)) {
+        loggedUnknownKeys.add(logKey);
+        console.warn(`[events.ingest] ${type}: dropping unknown field "${key}"`);
+      }
+      continue;
+    }
+    if (value === undefined) continue;
+    if (rule.bigint.has(key) && typeof value === "string" && /^\d+$/.test(value)) {
+      fields[key] = BigInt(value);
+    } else if (rule.json.has(key) && value === null) {
+      fields[key] = Prisma.JsonNull;
+    } else {
+      fields[key] = value;
+    }
+  }
+
+  // 3. Everything the row points at belongs to this event.
+  for (const ref of rule.refs) {
+    const id = rawFields[ref.column];
+    if (id == null) continue;
+    await assertRowsInEvent(db, eventId, type, ref.table, [id]);
+  }
+  if (type === "course.upserted" && payload.courseControls) {
+    await assertRowsInEvent(db, eventId, type, "control", payload.courseControls.map((cc) => cc.controlId));
+  }
+  if (type === "class.upserted" && payload.coursePools) {
+    await assertRowsInEvent(db, eventId, type, "course", payload.coursePools.map((cp) => cp.courseId));
+  }
+
   const create = {
     ...fields,
     id: payload.id,
@@ -862,23 +1426,23 @@ async function applyReferenceUpsert(
     ...(payload.seq > 0 ? { seq: payload.seq } : {}),
   };
 
-  if (type === "control.upserted") {
+  if (entity === "control") {
     await db.control.upsert({
       where: { id: payload.id },
-      create: create as never,
-      update: fields,
+      create: create as Prisma.ControlUncheckedCreateInput,
+      update: fields as Prisma.ControlUncheckedUpdateInput,
     });
     return;
   }
 
-  if (type === "course.upserted") {
-    // The climb's source does not travel (referenceJournal.ts): an incoming climb is held as a typed one, whatever
-    // this node's row said before (docs/course-elevation.md §6 "Read rule").
+  if (entity === "course") {
+    // An entry from a sender that does not know the source (before review package 23) carries the climb without
+    // it: it is held as a typed one, whatever this node's row said before (docs/course-elevation.md §6 "Readers").
     const climbSource = "climbM" in fields && !("climbSource" in fields) ? { climbSource: null } : {};
     await db.course.upsert({
       where: { id: payload.id },
-      create: create as never,
-      update: { ...fields, ...climbSource },
+      create: create as Prisma.CourseUncheckedCreateInput,
+      update: { ...fields, ...climbSource } as Prisma.CourseUncheckedUpdateInput,
     });
     if (payload.courseControls) {
       await db.courseControl.deleteMany({ where: { courseId: payload.id } });
@@ -900,8 +1464,8 @@ async function applyReferenceUpsert(
 
   await db.class.upsert({
     where: { id: payload.id },
-    create: create as never,
-    update: fields,
+    create: create as Prisma.ClassUncheckedCreateInput,
+    update: fields as Prisma.ClassUncheckedUpdateInput,
   });
   if (payload.coursePools) {
     await db.classCoursePool.deleteMany({ where: { classId: payload.id } });
@@ -914,5 +1478,30 @@ async function applyReferenceUpsert(
         })),
       });
     }
+  }
+}
+
+/** Throw `INVALID_PAYLOAD` unless every id names a row of `table` in this event. */
+async function assertRowsInEvent(
+  db: Db,
+  eventId: bigint,
+  type: string,
+  table: "control" | "course",
+  ids: unknown[],
+): Promise<void> {
+  const wanted = [...new Set(ids)];
+  if (wanted.some((id) => typeof id !== "string" || !UUID_RE.test(id))) {
+    throw new JournalApplyError("INVALID_PAYLOAD", `${type}: malformed ${table} reference`);
+  }
+  const where = { id: { in: wanted as string[] }, eventId };
+  const found =
+    table === "control"
+      ? await db.control.count({ where })
+      : await db.course.count({ where });
+  if (found !== wanted.length) {
+    throw new JournalApplyError(
+      "INVALID_PAYLOAD",
+      `${type}: references a ${table} that is not in this event`,
+    );
   }
 }

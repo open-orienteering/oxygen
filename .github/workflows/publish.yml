@@ -41,7 +41,6 @@ jobs:
             echo "sha_tag=${SHA_TAG}"
             echo "tags<<EOF"
             echo "${IMAGE}:${SHA_TAG}"
-            echo "${IMAGE}:edge"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v7
@@ -72,3 +71,26 @@ jobs:
           COMPOSE_PROJECT_NAME: oxygen-ghcr-smoke
           OXYGEN_PORT: "18080"
         run: docker compose -f docker-compose.release.yml down -v
+      # The smoke passed: record it. release.yml promotes only a commit that
+      # has this tag, so a tag on a commit whose smoke failed (or never ran)
+      # cannot reach stable/latest.
+      - name: Mark the SHA image verified
+        run: |
+          IMAGE="${{ steps.meta.outputs.image }}"
+          docker buildx imagetools create \
+            --tag "${IMAGE}:verified-${{ steps.meta.outputs.sha_tag }}" \
+            "${IMAGE}:${{ steps.meta.outputs.sha_tag }}"
+      # edge = the newest main commit that passed the smoke, and only while it
+      # is still the code tip of main (scripts/edge-guard.mjs).
+      - name: Move edge to this commit if it is still main's tip
+        run: |
+          IMAGE="${{ steps.meta.outputs.image }}"
+          git fetch --no-tags origin main
+          if verdict="$(node scripts/edge-guard.mjs "${GITHUB_SHA}" origin/main)"; then
+            echo "${verdict}"
+            docker buildx imagetools create \
+              --tag "${IMAGE}:edge" \
+              "${IMAGE}:${{ steps.meta.outputs.sha_tag }}"
+          else
+            echo "::notice::edge not moved (${verdict})"
+          fi

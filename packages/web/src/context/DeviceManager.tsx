@@ -8,6 +8,7 @@
  * competition switches.
  */
 
+import { failureConcernsCurrentDetection } from "../lib/read-failure";
 import {
   createContext,
   useContext,
@@ -19,6 +20,7 @@ import {
 } from "react";
 import {
   SIReaderConnection,
+  type SerialPortLike,
   type SIReaderStatus,
 } from "../lib/webserial";
 import { ReaderHub, type ReaderInfo } from "../lib/reader-hub";
@@ -30,7 +32,10 @@ import {
 } from "../lib/reader-bt";
 import { ReaderConnectionDialog } from "../components/ReaderConnectionDialog";
 import type { SICardReadout, SICardOwnerData } from "../lib/si-protocol";
-import { trpc } from "../lib/trpc";
+import { cardSecondsToDs } from "../lib/si-protocol";
+import { trpc, activeEventNameId } from "../lib/trpc";
+import { useCurrentUser } from "./CurrentUserContext";
+import { canApplyResults, findDuplicate, isLatestCard, nextCurrentCard, readoutsMatch as sameReadout, withTimeout, type ApplyHold, type SaveState } from "../lib/offline/readout-policy";
 import { KioskChannel, recentCardToKioskMessage } from "../lib/kiosk-channel";
 import { RunnerStatus, meosFromVolts, runnerStatusLabel, type RunnerStatusValue } from "@oxygen/shared";
 import { emitEvent } from "../lib/offline/events";
@@ -69,6 +74,17 @@ export interface RecentCard {
   /** Owner data read from the SI card (SI10/SIAC only) */
   ownerData?: SICardOwnerData | null;
   readout?: SICardReadout;
+  /** Event (URL nameId) the readout was taken in; a re-read in another event is not a duplicate. */
+  competitionId?: string | null;
+  /** Stored on the server or queued in the outbox. Only then is a re-read a duplicate. */
+  persisted?: boolean;
+  /** How the readout was saved; "not-saved" / "no-competition" ask the operator to read the card again. */
+  saveState?: SaveState;
+  /**
+   * The server did not write this read's result (RES-01): the stored result
+   * is protected (DQ, hand-set) or a worse read waits for the operator.
+   */
+  applyHold?: ApplyHold;
 }
 
 interface DeviceManagerState {
@@ -103,6 +119,10 @@ interface DeviceManagerState {
   currentCard: RecentCard | null;
   recentCards: RecentCard[];
   clearRecentCards: () => void;
+  /** Replace the stored result with the held read (the operator confirmed). */
+  confirmApply: (cardId: string) => Promise<void>;
+  /** Keep the stored result: drop the held read. */
+  dismissApply: (cardId: string) => void;
   isOnCardReadoutPage: boolean;
   setIsOnCardReadoutPage: (v: boolean) => void;
   /** Set the active competition nameId for kiosk BroadcastChannel */
@@ -114,6 +134,19 @@ interface DeviceManagerState {
   /** Last card number detected (fires before full readout completes) */
   lastDetectedCardNo: number | null;
   /**
+   * The newest read that failed (SI-05): the card was detected but could not
+   * be read completely. `seq` increments per failure so the same card failing
+   * twice is two events. Null until the first failure.
+   */
+  lastReadFailure: {
+    seq: number;
+    cardNumber: number;
+    reason: string;
+    readerId?: string;
+    /** False when another reader than the current detection's failed. */
+    concernsCurrentDetection: boolean;
+  } | null;
+  /**
    * The USB SI station used for station programming operations. With several
    * USB stations this is the first one; with none, an unconnected instance
    * that `connectReader("serial")` will connect.
@@ -122,6 +155,10 @@ interface DeviceManagerState {
 }
 
 const MAX_RECENT = 20;
+/** Longest the server store may take before the readout is queued instead (SI-29). */
+const STORE_TIMEOUT_MS = 8000;
+/** The readout lookup after a store (SYNC-16): past this the card resolves from the local cache. */
+const READOUT_FETCH_TIMEOUT_MS = 8000;
 
 // ─── Remembered Reader BTs ─────────────────────────────────
 // Chromium's getDevices() returns every device this origin was ever granted;
@@ -215,23 +252,6 @@ export function isPunchDataFresh(readout: SICardReadout): boolean {
   return true; // DOW matches or unavailable → assume fresh (server validates further)
 }
 
-/**
- * Check if two card readouts have identical punch data.
- * If all punches, start/finish/check times match exactly, the card hasn't changed.
- */
-function readoutsMatch(a: SICardReadout, b: SICardReadout): boolean {
-  if (a.cardNumber !== b.cardNumber) return false;
-  if (a.startTime !== b.startTime) return false;
-  if (a.finishTime !== b.finishTime) return false;
-  if (a.checkTime !== b.checkTime) return false;
-  if (a.punches.length !== b.punches.length) return false;
-  for (let i = 0; i < a.punches.length; i++) {
-    if (a.punches[i].controlCode !== b.punches[i].controlCode) return false;
-    if (a.punches[i].time !== b.punches[i].time) return false;
-  }
-  return true;
-}
-
 // ─── Provider ──────────────────────────────────────────────
 
 export function DeviceManagerProvider({ children }: { children: ReactNode }) {
@@ -248,13 +268,20 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
   const [recentCards, setRecentCards] = useState<RecentCard[]>([]);
   const [isOnCardReadoutPage, setIsOnCardReadoutPage] = useState(false);
   const [lastDetectedCardNo, setLastDetectedCardNo] = useState<number | null>(null);
+  const [lastReadFailure, setLastReadFailure] = useState<DeviceManagerState["lastReadFailure"]>(null);
+  const readFailureSeqRef = useRef(0);
 
-  const [competitionNameId, setCompetitionNameIdState] = useState<string | null>(null);
   const competitionNameIdRef = useRef<string | null>(null);
   const kioskChannelRef = useRef<KioskChannel | null>(null);
   // Legacy refs kept as no-ops for interface compat
   const pendingConfirmCardNoRef = useRef<number | null>(null);
   const pendingConfirmCallbackRef = useRef<(() => void) | null>(null);
+
+  const { authEnabled, user } = useCurrentUser();
+  const canApplyRef = useRef(true);
+  /** Id of the card read last (SI-17). */
+  const latestCardIdRef = useRef<string | null>(null);
+  canApplyRef.current = canApplyResults(authEnabled, user !== null);
 
   const storeReadout = trpc.cardReadout.storeReadout.useMutation();
   const applyResult = trpc.cardReadout.applyResult.useMutation();
@@ -266,7 +293,6 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
 
   // Manage kiosk BroadcastChannel lifecycle
   const setCompetitionNameId = useCallback((nameId: string | null) => {
-    setCompetitionNameIdState(nameId);
     competitionNameIdRef.current = nameId;
     if (kioskChannelRef.current) {
       kioskChannelRef.current.close();
@@ -315,17 +341,28 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
       // Deduplicate: if same card with identical punch data already exists,
       // reuse the entry (update timestamp) but still re-resolve action from DB
       // (runner may have been registered since last read).
-      const existing = recentCardsRef.current.find(
-        (c) => c.readout && readoutsMatch(c.readout, readout),
-      );
+      // The event comes from the URL, the same source as the x-competition-id
+      // header, so a queued entry always lands where an online store would
+      // have. (The old ref was only set by CompetitionShell; the standalone
+      // kiosk route never set it: SYNC-03 / SI-03.)
+      const competition = activeEventNameId();
+      const existing = findDuplicate(recentCardsRef.current, readout, competition);
       const isDuplicate = !!existing;
 
       const id = isDuplicate ? existing.id : `${readout.cardNumber}-${Date.now()}`;
+      latestCardIdRef.current = id;
+      // SI-17: after an await only the latest card may touch the screen.
+      const showCurrent = (card: RecentCard) => setCurrentCard((prev) => nextCurrentCard(prev, id, card));
+      const toKiosk = (card: RecentCard) => {
+        if (kioskChannelRef.current && isLatestCard(latestCardIdRef.current, id)) {
+          kioskChannelRef.current.send(recentCardToKioskMessage(card));
+        }
+      };
       const raceData = isPunchDataFresh(readout);
 
       // Initial entry — before we know if runner is in DB
       const entry: RecentCard = isDuplicate
-        ? { ...existing, timestamp: new Date(), ownerData: readout.ownerData ?? existing.ownerData, actionResolved: false }
+        ? { ...existing, timestamp: new Date(), ownerData: readout.ownerData ?? existing.ownerData, actionResolved: false, applyHold: undefined }
         : {
             id,
             cardNumber: readout.cardNumber,
@@ -336,6 +373,9 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             hasRaceData: raceData,
             ownerData: readout.ownerData ?? null,
             readout,
+            competitionId: competition,
+            persisted: false,
+            saveState: "saving",
           };
 
       setCurrentCard(entry);
@@ -347,94 +387,136 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
         });
       } else {
         setRecentCards((prev) => {
-          const next = [entry, ...prev].slice(0, MAX_RECENT);
+          // An earlier identical read that never got saved is replaced, not stacked.
+          const next = [
+            entry,
+            ...prev.filter((c) => !(c.readout && !c.persisted && sameReadout(c.readout, readout))),
+          ].slice(0, MAX_RECENT);
           recentCardsRef.current = next;
           return next;
         });
       }
 
+      // Queue the card read in this device's outbox. True only when the entry
+      // really is in IndexedDB: the UI must not claim a save that did not
+      // happen (SYNC-24), and a read that was not saved must not count as a
+      // duplicate of the next insert (SI-16).
+      const queueCardRead = async (): Promise<SaveState> => {
+        if (!competition) {
+          console.warn("[DeviceManager] No event in the URL: cannot queue the card read");
+          return "no-competition";
+        }
+        try {
+          await emitEvent("card.read", competition, toOfflineCardReadPayload(readout, raceData));
+          return "queued";
+        } catch (err) {
+          console.error("[DeviceManager] Could not queue the card read", err);
+          return "not-saved";
+        }
+      };
+
       // Store card data on the server (skip if duplicate — already stored)
       let serverPunchesRelevant = true;
-      if (!isDuplicate && navigator.onLine) {
-        try {
-          // SI readouts use seconds-since-midnight; the API contract is
-          // absolute deciseconds, so multiply by 10 on the way out.
-          const storeResult = await storeReadout.mutateAsync({
-            cardNo: readout.cardNumber,
-            punches: readout.punches.map((p) => ({
-              controlCode: p.controlCode,
-              time: p.time * 10,
-              ...(p.subSecond != null ? { subSecond: p.subSecond } : {}),
-            })),
-            checkTime:
-              readout.checkTime !== null && readout.checkTime !== undefined
-                ? readout.checkTime * 10
-                : undefined,
-            startTime:
-              readout.startTime !== null && readout.startTime !== undefined
-                ? readout.startTime * 10
-                : undefined,
-            finishTime:
-              readout.finishTime !== null && readout.finishTime !== undefined
-                ? readout.finishTime * 10
-                : undefined,
-            cardType: readout.cardType,
-            punchesFresh: raceData,
-            // SICardReadout carries volts; the API takes integer mV (MeOS).
-            batteryVoltage: meosFromVolts(readout.batteryVoltage) ?? undefined,
-            ownerData: readout.ownerData
-              ? {
-                  firstName: readout.ownerData.firstName,
-                  lastName: readout.ownerData.lastName,
-                  sex: readout.ownerData.sex,
-                  dateOfBirth: readout.ownerData.dateOfBirth,
-                  club: readout.ownerData.club,
-                  phone: readout.ownerData.phone,
-                  email: readout.ownerData.email,
-                  country: readout.ownerData.country,
-                }
-              : undefined,
-            metadata: readout.metadata
-              ? {
-                  batteryDate: readout.metadata.batteryDate,
-                  productionDate: readout.metadata.productionDate,
-                  hardwareVersion: readout.metadata.hardwareVersion,
-                  softwareVersion: readout.metadata.softwareVersion,
-                  clearCount: readout.metadata.clearCount,
-                }
-              : undefined,
-          });
-          serverPunchesRelevant = storeResult.punchesRelevant ?? true;
-        } catch {
-          console.warn("[DeviceManager] Failed to store readout on server — queuing offline event");
-          if (competitionNameIdRef.current) {
-            emitEvent(
-              "card.read",
-              competitionNameIdRef.current,
-              toOfflineCardReadPayload(readout, raceData),
+      let storeFailed = false;
+      let saveState: SaveState = "saved";
+      if (!isDuplicate) {
+        if (navigator.onLine) {
+          try {
+            // SI readouts use seconds-since-midnight; the API contract is
+            // absolute deciseconds, so multiply by 10 on the way out.
+            // An 8 s cap (SI-29): on a black-holed network the call can hang
+            // for minutes; the server dedups a late delivery against the
+            // queued entry.
+            const storeResult = await withTimeout(
+              storeReadout.mutateAsync({
+                cardNo: readout.cardNumber,
+                punches: readout.punches.map((p) => ({
+                  controlCode: p.controlCode,
+                  time: cardSecondsToDs(p.time),
+                  ...(p.subSecond != null ? { subSecond: p.subSecond } : {}),
+                })),
+                checkTime:
+                  readout.checkTime !== null && readout.checkTime !== undefined
+                    ? cardSecondsToDs(readout.checkTime)
+                    : undefined,
+                startTime:
+                  readout.startTime !== null && readout.startTime !== undefined
+                    ? cardSecondsToDs(readout.startTime)
+                    : undefined,
+                finishTime:
+                  readout.finishTime !== null && readout.finishTime !== undefined
+                    ? cardSecondsToDs(readout.finishTime)
+                    : undefined,
+                cardType: readout.cardType,
+                punchesFresh: raceData,
+                // SICardReadout carries volts; the API takes integer mV (MeOS).
+                batteryVoltage: meosFromVolts(readout.batteryVoltage) ?? undefined,
+                ownerData: readout.ownerData
+                  ? {
+                      firstName: readout.ownerData.firstName,
+                      lastName: readout.ownerData.lastName,
+                      sex: readout.ownerData.sex,
+                      dateOfBirth: readout.ownerData.dateOfBirth,
+                      club: readout.ownerData.club,
+                      phone: readout.ownerData.phone,
+                      email: readout.ownerData.email,
+                      country: readout.ownerData.country,
+                    }
+                  : undefined,
+                metadata: readout.metadata
+                  ? {
+                      batteryDate: readout.metadata.batteryDate,
+                      productionDate: readout.metadata.productionDate,
+                      hardwareVersion: readout.metadata.hardwareVersion,
+                      softwareVersion: readout.metadata.softwareVersion,
+                      clearCount: readout.metadata.clearCount,
+                    }
+                  : undefined,
+              }),
+              STORE_TIMEOUT_MS,
             );
+            serverPunchesRelevant = storeResult.punchesRelevant ?? true;
+          } catch (err) {
+            console.warn("[DeviceManager] Failed to store readout on server — queuing offline event");
+            // Only an unreachable or too-slow server skips the server fetch. A
+            // server that answered with an error (a kiosk key refused for
+            // writes, a lease refusal) can still resolve the card: the kiosk
+            // key may call cardReadout.readout.
+            storeFailed = (err as { data?: { code?: string } } | null)?.data?.code === undefined;
+            saveState = await queueCardRead();
           }
-        }
-      } else if (!isDuplicate && !navigator.onLine) {
-        // Offline — queue the card read event immediately
-        if (competitionNameIdRef.current) {
-          emitEvent(
-            "card.read",
-            competitionNameIdRef.current,
-            toOfflineCardReadPayload(readout, raceData),
-          );
+        } else {
+          // Offline — queue the card read event immediately
+          saveState = await queueCardRead();
         }
       }
+      const persisted = isDuplicate || saveState === "saved" || saveState === "queued";
+      const savedEntry: RecentCard = isDuplicate ? { ...entry } : { ...entry, persisted, saveState };
+      showCurrent(savedEntry);
+      setRecentCards((prev) => {
+        const next = prev.map((c) => (c.id === id ? savedEntry : c));
+        recentCardsRef.current = next;
+        return next;
+      });
 
       // Invalidate cache and resolve from server (only when online)
-      if (navigator.onLine) {
-        await utils.cardReadout.readout.invalidate({ cardNo: readout.cardNumber });
+      const useServer = navigator.onLine && !storeFailed;
+      if (useServer) {
+        // Not awaited: with a mounted observer of this card the invalidate
+        // waits for its refetch, which the timeout below must cover too.
+        // The query is marked stale at once, so the fetch below refetches.
+        void utils.cardReadout.readout.invalidate({ cardNo: readout.cardNumber });
       }
 
       // Resolve runner info and determine action (always — even for duplicates)
       try {
-        const result = navigator.onLine
-          ? await utils.cardReadout.readout.fetch({ cardNo: readout.cardNumber })
+        // A failed store means the server is unreachable (or too slow): resolve
+        // from the local cache instead of waiting out a second request (SI-15).
+        // No service-worker cache answers this any more (SYNC-16), so a slow
+        // link must not hang the station: past the timeout it resolves
+        // locally like an unreachable server.
+        const result = useServer
+          ? await withTimeout(utils.cardReadout.readout.fetch({ cardNo: readout.cardNumber }), READOUT_FETCH_TIMEOUT_MS)
           : null;
 
         // Offline — skip to catch block for local resolution
@@ -473,7 +555,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
         }
 
         const updated: RecentCard = {
-          ...entry,
+          ...savedEntry,
           action,
           actionResolved: true,
           hasRaceData: result.found
@@ -487,7 +569,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
           isRentalCard: result.found ? result.isRentalCard : undefined,
         };
 
-        setCurrentCard(updated);
+        showCurrent(updated);
         setRecentCards((prev) => {
           const next = prev.map((c) => (c.id === id ? updated : c));
           recentCardsRef.current = next;
@@ -495,19 +577,34 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
         });
 
         // Broadcast to kiosk window (paired mode)
-        if (kioskChannelRef.current) {
-          kioskChannelRef.current.send(recentCardToKioskMessage(updated));
-        }
+        toKiosk(updated);
 
         // Apply computed result to oRunner (readout station step)
         if (action === "readout" && result.found && navigator.onLine) {
           try {
-            await applyResult.mutateAsync({
+            const payload = {
               runnerId: result.runner.id,
               status: result.timing.status,
               finishTime: result.timing.finishTime,
               startTime: result.timing.startTime,
-            });
+              punchesFresh: raceData,
+            };
+            const applied = await applyResult.mutateAsync(payload);
+            if (!applied.ok) {
+              // RES-01: the server kept the stored result. Ask the operator.
+              const held: RecentCard = {
+                ...updated,
+                applyHold: { outcome: applied.outcome as ApplyHold["outcome"], reason: applied.reason, payload },
+              };
+              showCurrent(held);
+              setRecentCards((prev) => {
+                const next = prev.map((c) => (c.id === id ? held : c));
+                recentCardsRef.current = next;
+                return next;
+              });
+            }
+            // The kiosk (paired mode) refetches once the result is written.
+            kioskChannelRef.current?.send({ type: "readout-applied", cardNumber: readout.cardNumber });
             // Invalidate caches so results/runner lists recalculate placements
             // for ALL runners in the class, not just the one just read out.
             // Also invalidate findByCard so ReadoutScreen sees the updated
@@ -517,14 +614,18 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             utils.runner.findByCard.invalidate({ cardNo: readout.cardNumber });
           } catch {
             console.warn("[DeviceManager] Failed to apply readout result — queuing offline event");
-            if (competitionNameIdRef.current) {
-              emitEvent("result.applied", competitionNameIdRef.current, {
-                runnerId: result.runner.id,
-                cardNo: result.runner.cardNo,
-                status: result.timing.status,
-                finishTime: result.timing.finishTime,
-                startTime: result.timing.startTime,
-              });
+            if (competition && canApplyRef.current) {
+              try {
+                await emitEvent("result.applied", competition, {
+                  runnerId: result.runner.id,
+                  cardNo: result.runner.cardNo,
+                  status: result.timing.status,
+                  finishTime: result.timing.finishTime,
+                  startTime: result.timing.startTime,
+                });
+              } catch (err) {
+                console.error("[DeviceManager] Could not queue the result", err);
+              }
             }
           }
         }
@@ -538,6 +639,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             finishTime: readout.finishTime ?? undefined,
           },
           queryClient,
+          competition,
         );
 
         if (localResult && localResult.punchesRelevant) {
@@ -547,7 +649,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             : undefined;
 
           const offlineResolved: RecentCard = {
-            ...entry,
+            ...savedEntry,
             action: "readout",
             actionResolved: true,
             hasRaceData: true,
@@ -558,46 +660,49 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             runningTime: localResult.timing.runningTime,
           };
 
-          setCurrentCard(offlineResolved);
+          showCurrent(offlineResolved);
           setRecentCards((prev) => {
             const next = prev.map((c) => (c.id === id ? offlineResolved : c));
             recentCardsRef.current = next;
             return next;
           });
-          if (kioskChannelRef.current) {
-            kioskChannelRef.current.send(recentCardToKioskMessage(offlineResolved));
-          }
+          toKiosk(offlineResolved);
 
-          // Emit result.applied event for later sync
-          if (competitionNameId) {
-            emitEvent("result.applied", competitionNameId, {
-              runnerId: localResult.runner.id,
-              cardNo: localResult.runner.cardNo,
-              status: localResult.timing.status,
-              finishTime: localResult.timing.finishTime,
-              startTime: localResult.timing.startTime,
-            });
+          // Emit result.applied for later sync. The competition comes from the
+          // URL (the old closure value was always null, so this never ran:
+          // SI-02 / MC-06) and only a device that may write results queues it
+          // (D11: a kiosk-key-only device queues just its card.read).
+          if (competition && canApplyRef.current) {
+            try {
+              await emitEvent("result.applied", competition, {
+                runnerId: localResult.runner.id,
+                cardNo: localResult.runner.cardNo,
+                status: localResult.timing.status,
+                finishTime: localResult.timing.finishTime,
+                startTime: localResult.timing.startTime,
+              });
+            } catch (err) {
+              console.error("[DeviceManager] Could not queue the result", err);
+            }
           }
         } else {
           // No cached data or runner not found — check if runner exists in cache at all
-          const cachedRunner = lookupRunnerByCard(readout.cardNumber, queryClient);
+          const cachedRunner = lookupRunnerByCard(readout.cardNumber, queryClient, competition);
           const fallback: RecentCard = {
-            ...entry,
+            ...savedEntry,
             actionResolved: true,
             action: cachedRunner ? "pre-start" : "register",
             runnerName: cachedRunner?.name,
             className: cachedRunner?.className,
             clubName: cachedRunner?.clubName,
           };
-          setCurrentCard(fallback);
+          showCurrent(fallback);
           setRecentCards((prev) => {
             const next = prev.map((c) => (c.id === id ? fallback : c));
             recentCardsRef.current = next;
             return next;
           });
-          if (kioskChannelRef.current) {
-            kioskChannelRef.current.send(recentCardToKioskMessage(fallback));
-          }
+          toKiosk(fallback);
         }
       }
     },
@@ -673,6 +778,40 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
     setCurrentCard(null);
   }, []);
 
+  const setHold = useCallback((cardId: string, hold: ApplyHold | undefined) => {
+    const patch = (c: RecentCard): RecentCard => ({ ...c, applyHold: hold });
+    setCurrentCard((prev) => (prev?.id === cardId ? patch(prev) : prev));
+    setRecentCards((prev) => {
+      const next = prev.map((c) => (c.id === cardId ? patch(c) : c));
+      recentCardsRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const dismissApply = useCallback((cardId: string) => setHold(cardId, undefined), [setHold]);
+
+  const confirmApply = useCallback(
+    async (cardId: string) => {
+      const card = recentCardsRef.current.find((c) => c.id === cardId);
+      const hold = card?.applyHold;
+      if (!card || !hold || hold.outcome !== "needsConfirmation") return;
+      try {
+        const res = await applyResult.mutateAsync({ ...hold.payload, confirmed: true });
+        if (res.ok) setHold(cardId, undefined);
+        else setHold(cardId, { ...hold, outcome: res.outcome as ApplyHold["outcome"], reason: res.reason });
+        utils.runner.list.invalidate();
+        utils.lists.resultList.invalidate();
+        utils.cardReadout.readout.invalidate({ cardNo: card.cardNumber });
+        utils.runner.findByCard.invalidate({ cardNo: card.cardNumber });
+        kioskChannelRef.current?.send({ type: "readout-applied", cardNumber: card.cardNumber });
+      } catch (err) {
+        console.error("[DeviceManager] Could not apply the confirmed result", err);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [setHold],
+  );
+
   // ── Wire up event listeners ─────────────────────────────
 
   useEffect(() => {
@@ -705,6 +844,37 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
       addRecentCard(readout);
     };
 
+    const onCardReadFailed = (e: Event) => {
+      const failure = (e as CustomEvent).detail as {
+        cardNumber: number;
+        reason: string;
+        readerId?: string;
+      };
+      // Not a read card: no Recent Cards row, nothing sent to the server. The
+      // operator banner and the kiosk tell the runner to insert the card again.
+      // With several readers, a failure on another reader than the one that
+      // reported the current detection must not reset that detection or turn
+      // the kiosk's "reading" screen into an error for the wrong card.
+      const concerns = failureConcernsCurrentDetection(failure.readerId, conn.lastDetectionReaderId);
+      setLastReadFailure({
+        seq: ++readFailureSeqRef.current,
+        cardNumber: failure.cardNumber,
+        reason: failure.reason,
+        readerId: failure.readerId,
+        concernsCurrentDetection: concerns,
+      });
+      if (!concerns) {
+        return;
+      }
+      setLastDetectedCardNo(null);
+      if (kioskChannelRef.current) {
+        kioskChannelRef.current.send({
+          type: "card-read-failed",
+          cardNumber: failure.cardNumber,
+        });
+      }
+    };
+
     const onCardRemoved = (e: Event) => {
       // With several readers, only the reader that reported the last insert
       // may clear the kiosk's "do not remove the card" screen.
@@ -722,12 +892,17 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
     conn.addEventListener("si:card-detected", onCardDetected);
     conn.addEventListener("si:card-readout", onCardReadout);
     conn.addEventListener("si:card-removed", onCardRemoved);
+    conn.addEventListener("si:card-read-failed", onCardReadFailed);
     conn.addEventListener("hub:readers-changed", onReadersChanged);
     setReaders(conn.snapshot());
 
-    // Reopen every USB station this origin was granted before (no picker).
+    // Reopen every USB station this origin was granted before (no picker), on
+    // load and again whenever the browser reports a granted port plugged in
+    // (a reader that was unplugged mid-event comes back without a click).
     let cancelled = false;
-    if (serialSupported) {
+    const attaching = new Set<SerialPortLike>();
+    const attachGranted = () => {
+      if (!serialSupported) return;
       SIReaderConnection.grantedPorts()
         .then(async (ports) => {
           for (const port of ports) {
@@ -735,19 +910,33 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             const held = conn
               .list()
               .some((r) => r instanceof SIReaderConnection && r.holdsPort(port));
-            if (held) continue;
-            const idle = conn
+            if (held || attaching.has(port)) continue;
+            // An idle or errored connection is reused before another is added.
+            const free = conn
               .list()
-              .find((r) => r instanceof SIReaderConnection && r.status === "idle");
-            const reader = (idle as SIReaderConnection | undefined) ?? new SIReaderConnection();
+              .find(
+                (r) =>
+                  r instanceof SIReaderConnection &&
+                  (r.status === "idle" || r.status === "error"),
+              );
+            const reader = (free as SIReaderConnection | undefined) ?? new SIReaderConnection();
             conn.add(reader);
-            await reader.attach(port).catch(() => {
-              // Port busy (another tab) or unplugged; the row stays in error.
-            });
+            attaching.add(port);
+            await reader
+              .attach(port)
+              .catch(() => {
+                // Port busy (another tab) or unplugged; the row stays in error.
+              })
+              .finally(() => attaching.delete(port));
           }
         })
         .catch(() => {});
-    }
+    };
+    const serialEvents = serialSupported
+      ? (navigator as Navigator & { serial?: EventTarget }).serial
+      : undefined;
+    serialEvents?.addEventListener?.("connect", attachGranted);
+    attachGranted();
 
     // Reader BTs remembered from an earlier visit: wait for each to advertise
     // (the next card inserted wakes it) and reconnect without a picker.
@@ -777,6 +966,8 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
       conn.removeEventListener("si:card-detected", onCardDetected);
       conn.removeEventListener("si:card-readout", onCardReadout);
       conn.removeEventListener("si:card-removed", onCardRemoved);
+      conn.removeEventListener("si:card-read-failed", onCardReadFailed);
+      serialEvents?.removeEventListener?.("connect", attachGranted);
     };
   }, [getHub, addRecentCard, serialSupported]);
 
@@ -808,12 +999,15 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
     currentCard,
     recentCards,
     clearRecentCards,
+    confirmApply,
+    dismissApply,
     isOnCardReadoutPage,
     setIsOnCardReadoutPage,
     setCompetitionNameId,
     getKioskChannel,
     setPendingConfirmCardNo,
     lastDetectedCardNo,
+    lastReadFailure,
     getReaderConnection: getConnection,
   };
 

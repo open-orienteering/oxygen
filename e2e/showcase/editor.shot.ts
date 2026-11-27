@@ -48,6 +48,8 @@ async function closeUp(page: Page, name: string, steps: number, select = false):
 
 async function openEditor(page: Page, query = ""): Promise<void> {
   await selectEvent(page);
+  // The contour interval banner (docs/course-elevation.md §0.43) is not part of a showcase shot: it is dismissed as a person would.
+  await page.addInitScript((key) => { try { window.sessionStorage.setItem(key, "1"); } catch { /* not remembered */ } }, `oxygen:interval-banner-dismissed:${EVENT}`);
   await page.goto(`/${EVENT}/course-editor${query}`);
   await expect(page.getByTestId("editor-page")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("editor-site").first()).toBeAttached({ timeout: 60_000 });

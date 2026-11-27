@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import type { EventInfo, EventKind } from "@oxygen/shared";
+import { parseClockTime } from "@oxygen/shared";
 import { trpc } from "../lib/trpc";
 import { formatDate } from "../lib/format";
 import { LanguageSelector } from "../components/LanguageSelector";
@@ -490,6 +491,11 @@ function CreateCompetitionForm({
   const [date, setDate] = useState(formatDate(new Date()));
   const [kind, setKind] = useState<EventKind>("competition");
   const [kindCustom, setKindCustom] = useState("");
+  const [isTestEvent, setIsTestEvent] = useState(false);
+  // The planned first start sets ZeroTime (one hour before), so no start
+  // lands on it (RES-04). 10:00 gives the old 09:00 default.
+  const [firstStart, setFirstStart] = useState("10:00");
+  const firstStartDs = parseClockTime(firstStart);
 
   const createMutation = trpc.competition.create.useMutation({
     onSuccess: (data) => onCreated(data.nameId),
@@ -497,12 +503,16 @@ function CreateCompetitionForm({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || firstStartDs === null) return;
     createMutation.mutate({
       name: name.trim(),
       date,
       kind,
       kindCustom: kind === "other" ? kindCustom.trim() : "",
+      ...(isTestEvent ? { isTestEvent: true } : {}),
+      // The time zone takes the server default (Europe/Stockholm); it is
+      // changed under Event Info.
+      ...(firstStartDs > 0 ? { firstStart: firstStartDs } : {}),
     });
   };
 
@@ -583,12 +593,40 @@ function CreateCompetitionForm({
             required
           />
         </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-600 mb-1">
+            {t("plannedFirstStart")}
+          </label>
+          <input
+            type="text"
+            inputMode="numeric"
+            data-testid="new-event-first-start"
+            value={firstStart}
+            onChange={(e) => setFirstStart(e.target.value)}
+            aria-invalid={firstStartDs === null || undefined}
+            className={`w-full px-4 py-2.5 border rounded-lg text-sm tabular-nums focus:outline-none focus:ring-2 focus:border-transparent ${
+              firstStartDs === null ? "border-red-400 focus:ring-red-400" : "border-slate-200 focus:ring-blue-500"
+            }`}
+          />
+          <p className="mt-1 text-xs text-slate-400">{t("plannedFirstStartHelp")}</p>
+        </div>
+        <label className="flex items-center gap-2 text-sm text-slate-600">
+          <input
+            type="checkbox"
+            data-testid="new-event-is-test"
+            checked={isTestEvent}
+            onChange={(e) => setIsTestEvent(e.target.checked)}
+            className="h-4 w-4 cursor-pointer"
+          />
+          {t("newEventTestEvent")}
+        </label>
         <div className="flex gap-3 pt-1">
           <button
             type="submit"
             disabled={
               createMutation.isPending ||
               !name.trim() ||
+              firstStartDs === null ||
               (kind === "other" && !kindCustom.trim())
             }
             className="px-6 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer"

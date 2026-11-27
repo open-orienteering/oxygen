@@ -553,7 +553,7 @@ describe("matchPunchesToCourse free_order", () => {
   });
 
   it("applies noTimingLeg adjustment in free order", () => {
-    // Callers always pre-sort by time (see performReadout / lists).
+    // Punches arrive in card order (see mergePunchesInCardOrder).
     const punches = [
       { type: 31, time: START + 100, source: "card" as const },
       { type: 32, time: START + 600, source: "card" as const },

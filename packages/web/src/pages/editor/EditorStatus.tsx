@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { IconStats } from "../../components/map-icons";
+import { openMapInfoAtInterval, useContourInterval } from "./contourIntervalState";
 import { formatClock } from "../../lib/editor/leg-alternatives";
 import { checksBadge, courseInfoRows, saveIndicator, type SaveState, type StatusInput } from "../../lib/editor/status";
 
@@ -48,6 +49,7 @@ export interface PaceSetting {
 
 export function StatsButton({ status, onRetryElevation, profile, pace }: { status: Omit<StatusInput, "scale">; onRetryElevation?: () => void; profile?: ProfileToggle | null; pace?: PaceSetting | null }) {
   const { t } = useTranslation("editor");
+  const mayChangeInterval = useContourInterval().canEdit;
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
 
@@ -94,6 +96,16 @@ export function StatsButton({ status, onRetryElevation, profile, pace }: { statu
                 </li>
               ))}
             </ul>
+          )}
+          {/* §0.43: on the contours with an interval nobody confirmed the number is an estimate, and not stored. */}
+          {line?.state === "ready" && line.basis === "contours" && !line.intervalConfirmed && (
+            <div data-testid="editor-stats-interval-note" className="mt-1 border-t border-slate-100 pt-1 text-[10px] text-amber-700 max-w-[16rem]">
+              <p>{t("intervalEstimateNote", { m: line.assumedIntervalM ?? 5 })}</p>
+              {mayChangeInterval && (
+                <button type="button" data-testid="editor-stats-interval-confirm" onClick={() => { setOpen(false); openMapInfoAtInterval(); }}
+                  className="mt-1 rounded-md border border-amber-300 bg-white px-2 py-0.5 text-[11px] text-amber-800 hover:bg-amber-50 cursor-pointer">{t("intervalConfirm")}</button>
+              )}
+            </div>
           )}
           {/* docs/course-elevation.md §4.4: what the line climb rests on, whose heights they are, and asking again. */}
           {line?.state === "ready" && (line.basis === "contours" || line.partial || line.attribution) && (

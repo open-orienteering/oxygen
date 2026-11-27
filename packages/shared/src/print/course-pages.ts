@@ -94,6 +94,18 @@ export interface CoursePagesOptions {
  */
 export type PrintSheet = SheetInput & { copies?: number };
 
+/**
+ * A graphic that stands in for a control's circle or number could not be loaded (CRS-010, docs/course-print.md §8.2):
+ * the page would print the control bare or without its number, so the print fails (a 400 on the route; the device
+ * falls back to the server). Any other missing graphic stays a warning.
+ */
+export class PrintGraphicMissingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PrintGraphicMissingError";
+  }
+}
+
 export interface CoursePagesResult {
   bytes: Uint8Array;
   pageCount: number;
@@ -164,6 +176,7 @@ export async function renderCoursePages(opts: CoursePagesOptions): Promise<Cours
     const windows = new Map<number, ImageWindow>();
     // SVG: one raster per graphic and page, over the union of its crops (§6.3), at the largest box a placement needs.
     const svgPlacements = new Map<number, typeof page.images>();
+    const rasterFailures = new Map<number, string>();
     for (const img of page.images) {
       const g = opts.graphics?.get(img.graphicId);
       if (!g) continue;
@@ -189,12 +202,30 @@ export async function renderCoursePages(opts: CoursePagesOptions): Promise<Cours
           png = await (window ? rasterise(g.data, w, h, graphicId, window) : rasterise(g.data, w, h, graphicId));
           pngCache.set(key, png);
         } catch (err) {
-          pageWarnings.push(`${sheet.label}: SVG_RASTER: graphic ${graphicId}: ${err instanceof Error ? err.message : String(err)}`);
+          const reason = err instanceof Error ? err.message : String(err);
+          rasterFailures.set(graphicId, reason);
+          pageWarnings.push(`${sheet.label}: SVG_RASTER: graphic ${graphicId}: ${reason}`);
           continue;
         }
       }
       images.set(graphicId, png);
       if (window) windows.set(graphicId, window);
+    }
+    // A graphic that hides a control's circle or number must be there (CRS-010): without it the control prints bare.
+    const onMap = new Set(page.images.filter((i) => i.layer === "map").map((i) => i.graphicId));
+    for (const o of sheet.course.objects ?? []) {
+      if (o.kind !== "image" || !o.attach || !(o.props.hideControlCircle || o.props.hideControlNumber)) continue;
+      const graphicId = o.props.graphicId;
+      if (!onMap.has(graphicId) || images.has(graphicId)) continue;
+      const controlId = String(o.attach.controlId);
+      // Only a hide that is drawn with its control on this page counts (an undrawn control hides nothing).
+      const site = sheet.course.sites.find((s) => s.id === controlId);
+      if (!site || (site.x === 0 && site.y === 0)) continue;
+      const code = site.code ?? controlId;
+      const why = rasterFailures.get(graphicId);
+      throw new PrintGraphicMissingError(
+        `${sheet.label}: graphic ${graphicId} could not be loaded and it replaces the circle or number of control ${code}; restore the graphic or untick the hide options${why ? ` (${why})` : ""}`,
+      );
     }
     const written = await writePage(writer, page, { mode, images, windows });
     if (copies > 1) writer.copyPage(written.page, copies - 1);

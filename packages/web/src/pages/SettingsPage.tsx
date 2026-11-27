@@ -16,6 +16,7 @@ import { EventorKeysPanel } from "../components/EventorKeysPanel";
 import { HeightDataPanel } from "../components/HeightDataPanel";
 import { NorthLinesBadge } from "../components/NorthLinesBadge";
 import { ClubMapImportState } from "../components/ClubMapImportState";
+import { ClubMapInterval } from "../components/ClubMapInterval";
 import { isClubMapImportPending } from "../lib/club-map-import";
 
 const CLUB_TABS = ["maps", "controls", "classes", "groups"] as const;
@@ -377,6 +378,7 @@ export function SettingsPage() {
                         )}
                       </div>
                     )}
+                    {row.version && <ClubMapInterval id={row.id} confirmedM={row.contourIntervalM} assumedM={row.assumedContourIntervalM} mayChange={row.mayChange} />}
                     {row.version == null && (
                       <ClubMapImportState
                         job={row.importJob}

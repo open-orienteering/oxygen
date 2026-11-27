@@ -5,7 +5,10 @@
 # Uses the published GHCR image, so the host only needs Docker + Compose:
 # no Node.js, pnpm, dependency install, or source build is required.
 #
-# Override OXYGEN_IMAGE to test a release or immutable SHA image.
+# Override OXYGEN_IMAGE to test a release or immutable SHA image. CI runs it
+# on a locally loaded image with OXYGEN_PULL_POLICY=never, OXYGEN_PORT and
+# COMPOSE_PROJECT_NAME set so it cannot touch another stack.
+# OXYGEN_PULL_POLICY defaults to always here (the compose file defaults to missing).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,7 +37,7 @@ echo "  Loaded."
 
 # ─── 3. Verify the running image over HTTP ───────────────────────────────────
 BASE_URL="http://127.0.0.1:$OXYGEN_PORT"
-HEALTH_RESPONSE="$(curl --fail --silent --show-error "$BASE_URL/health")"
+HEALTH_RESPONSE="$(curl --fail --silent --show-error "$BASE_URL/ready")"
 INDEX_RESPONSE="$(curl --fail --silent --show-error "$BASE_URL/")"
 grep -q '"status":"ok"' <<<"$HEALTH_RESPONSE"
 grep -q '<div id="root">' <<<"$INDEX_RESPONSE"

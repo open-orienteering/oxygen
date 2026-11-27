@@ -488,7 +488,11 @@ describe("completion's edges (§5.4)", () => {
     const version = await A.db.clubMapVersion.create({ data: { clubMapId, seq: 2, label: "edge", sourceHash, documentHash: hash, patch: layers as never } });
     const job = { eventId: F.eventId, clubMapId, sourceHash, documentHash: hash, patch: layers };
 
-    expect(await completePromote(A.db, job)).toEqual({ outcome: "pinned", versionId: version.id });
+    // A computed climb rested on the old document: the pin clears it (and journals the cleared row).
+    const climbCourse = await A.db.course.create({ data: { eventId: F.eventId, name: "Promote climb", lengthM: 900, legs: "900;", lengthSource: "file", climbM: 12, climbSource: "computed" } });
+    expect(await completePromote(A.db, job)).toEqual({ outcome: "pinned", versionId: version.id, documentChanged: true });
+    expect(await A.db.course.findUniqueOrThrow({ where: { id: climbCourse.id } })).toMatchObject({ climbM: 0, climbSource: null });
+    expect(await A.db.journalEntry.count({ where: { eventId: F.eventId, type: "course.upserted", payload: { path: ["id"], equals: climbCourse.id } } })).toBeGreaterThan(0);
     expect(await pin(F)).toEqual({ documentHash: hash, clubMapVersionId: version.id });
     expect(Object.keys((await open(F).mapPatch.get()).patch!.ops)).toEqual([b]);
 

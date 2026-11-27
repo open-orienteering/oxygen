@@ -199,6 +199,11 @@ export function parseIOFCourseData(xmlContent: string): ParsedCourseData {
   if (!raceCourseData) {
     throw new Error("Invalid IOF CourseData XML: missing <RaceCourseData>");
   }
+  // A multi-race file would read as zero courses (and wipe the event under
+  // Replace all): refused until the dialog can pick a race (course-layer.md §6.4).
+  if (Array.isArray(raceCourseData)) {
+    throw new Error(`The file holds ${raceCourseData.length} races; export one race per file`);
+  }
 
   // Parse map scale
   const mapScale = safeFloat(raceCourseData.Map?.Scale) || 15000;

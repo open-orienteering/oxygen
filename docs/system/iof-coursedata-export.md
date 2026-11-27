@@ -125,6 +125,10 @@ what the export writes, and the same from other tools:
 | `CourseControl type="CrossingPoint"` / `"EndOfMarkedRoute"` | not a row of the course: it folds into the next row — a crossing point becomes that leg's `crossing` (`section` for `MandatoryOutOfBoundsAreaPassage`), a split `LegLength` is summed; a fold before the first or after the last row joins no leg. An `EndOfMarkedRoute` point is not imported |
 | `specialInstruction="TapedRoute"` / `"FunnelTapedRoute"` | the leg's `style: "marked_route"` |
 | `Extensions/…:MapExchange` = `true` | a newly created site is `kind: "map_exchange"`; an existing site keeps its kind |
+| `CourseFamily` naming a live **forked** root of the event | under **Merge** the variant is skipped (listed as a forked course left as it is), not created beside the fork; under **Replace all** it imports as a linear course and the root goes (`course-layer.md` §6.4 "Import semantics") |
+| a class listed once per fork variant (`ClassCourseAssignment` per variant, as the export writes it) | not pre-selected on any variant; the preview warns `class_on_fork_variants` and the class stays unassigned (forks are not imported) |
+| several `RaceCourseData` | refused `BAD_REQUEST` ("The file holds N races; export one race per file") |
+| no `Length` on a course | an existing course keeps its stored length; a new one gets a derived length |
 
 A re-import over an existing course carries the stored leg props the file
 is silent on (bends, gaps) where the leg still runs between the same

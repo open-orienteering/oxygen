@@ -2,8 +2,9 @@
  * Online-input integration tests.
  *
  * Covers the full ROC ingestion path: persisted config → `pollOnceForEvent`
- * → parsed punches → `loadMapping` rewrite → `punches` insert with
- * control resolution.
+ * → parsed punches → control mapping from the config → `punches` insert
+ * with control resolution, plus the router writes that share the config
+ * row with the puller's watermark.
  *
  * The remote service is mocked at the `fetch` level so we don't depend on
  * ROC's actual servers. The matcher / kiosk pipelines are *not* exercised
@@ -17,7 +18,27 @@ import {
   pollOnceForEvent,
   setPullerEnabled,
 } from "../../online-input/puller.js";
-import { saveMapping } from "../../online-input/mapping.js";
+import { makeCaller } from "../helpers/caller.js";
+
+function cfgKey(eventId: bigint): string {
+  return `online_input_${String(eventId)}_config`;
+}
+
+async function readConfig(eventId: bigint) {
+  return JSON.parse((await getSetting(cfgKey(eventId))) ?? "{}") as {
+    lastId: number;
+    mapping: Record<string, number>;
+    unitId: string;
+    intervalSeconds: number;
+  };
+}
+
+function rocBody(rows: string[]): Response {
+  return new Response(rows.join("\n"), {
+    status: 200,
+    headers: { "Content-Type": "text/plain" },
+  });
+}
 
 afterAll(async () => {
   await disconnect();
@@ -69,6 +90,7 @@ async function teardown({ ctx, fetchSpy }: FixtureCtx) {
       "poll_count",
       "punches_imported",
       "last_error",
+      "rows_skipped",
     ].map((k) =>
       setSetting(`online_input_${String(ctx.eventId)}_${k}`, null),
     ),
@@ -206,8 +228,11 @@ describe("online-input ROC puller", () => {
   it("applies the per-event control mapping (start / finish / check)", async () => {
     const f = await setupPuller("oi-mapping");
     try {
-      // 100 → finish (2). The raw 100 should never hit `control_code`.
-      await saveMapping(f.ctx.nameId, { "100": 2 });
+      // 100 → finish (2), set the way the Event page sets it. The raw 100
+      // should never hit `control_code`.
+      const caller = makeCaller(f.ctx.event);
+      await caller.onlineInput.addMapping({ rawCode: 100, target: 2 });
+      expect((await readConfig(f.ctx.eventId)).mapping).toEqual({ "100": 2 });
 
       f.fetchSpy.mockResolvedValue(
         new Response("1;100;7777;2026-01-01 10:30:00", { status: 200 }),
@@ -323,6 +348,290 @@ describe("online-input ROC puller", () => {
       expect(journal).toBe(3);
     } finally {
       await teardown(f);
+    }
+  });
+
+  it("removeMapping stops rewriting the code on the next poll", async () => {
+    const f = await setupPuller("oi-unmap");
+    try {
+      const caller = makeCaller(f.ctx.event);
+      await caller.onlineInput.addMapping({ rawCode: 100, target: 2 });
+      await caller.onlineInput.removeMapping({ rawCode: 100 });
+      expect((await readConfig(f.ctx.eventId)).mapping).toEqual({});
+
+      f.fetchSpy.mockResolvedValue(rocBody(["1;100;7778;2026-01-01 10:30:00"]));
+      await pollOnceForEvent(f.ctx.eventId);
+
+      const punch = await f.ctx.db.punch.findFirst({
+        where: { eventId: f.ctx.eventId, cardNo: 7778 },
+      });
+      expect(punch?.controlCode).toBe(100);
+    } finally {
+      await teardown(f);
+    }
+  });
+
+  it("keeps importing after Reset last id: stored punches are skipped, new ones added", async () => {
+    const f = await setupPuller("oi-reset");
+    try {
+      const caller = makeCaller(f.ctx.event);
+      const rows = [
+        "1;31;5001;2026-01-01 10:00:00",
+        "2;32;5002;2026-01-01 10:01:00",
+      ];
+      f.fetchSpy.mockResolvedValueOnce(rocBody(rows));
+      expect(await pollOnceForEvent(f.ctx.eventId)).toEqual({ fetched: 2, inserted: 2 });
+
+      await caller.onlineInput.clearLastId();
+      expect((await readConfig(f.ctx.eventId)).lastId).toBe(0);
+
+      // ROC answers lastId=0 with everything again, plus one new punch.
+      f.fetchSpy.mockResolvedValueOnce(
+        rocBody([...rows, "3;31;5003;2026-01-01 10:02:00"]),
+      );
+      const second = await pollOnceForEvent(f.ctx.eventId);
+      expect(second).toEqual({ fetched: 3, inserted: 1 });
+
+      const punches = await f.ctx.db.punch.findMany({
+        where: { eventId: f.ctx.eventId, source: "online_input" },
+        select: { cardNo: true },
+      });
+      expect(punches.map((p) => p.cardNo).sort()).toEqual([5001, 5002, 5003]);
+      expect((await readConfig(f.ctx.eventId)).lastId).toBe(3);
+      expect(
+        await getSetting(`online_input_${String(f.ctx.eventId)}_last_error`),
+      ).toBeNull();
+      expect(
+        await getSetting(`online_input_${String(f.ctx.eventId)}_punches_imported`),
+      ).toBe("3");
+      // Only punches actually stored are journaled.
+      const journal = await f.ctx.db.journalEntry.count({
+        where: { eventId: f.ctx.eventId, type: "punch.recorded" },
+      });
+      expect(journal).toBe(3);
+
+      // And the following poll is back to normal.
+      f.fetchSpy.mockResolvedValueOnce(rocBody(["4;32;5004;2026-01-01 10:03:00"]));
+      expect(await pollOnceForEvent(f.ctx.eventId)).toEqual({ fetched: 1, inserted: 1 });
+    } finally {
+      await teardown(f);
+    }
+  });
+
+  it("an out-of-range row is skipped and does not block the rows around it", async () => {
+    const f = await setupPuller("oi-range");
+    try {
+      f.fetchSpy.mockResolvedValueOnce(
+        rocBody([
+          "1;31;6001;2026-01-01 10:00:00",
+          "99999999999;31;6002;2026-01-01 10:01:00",
+          "3;32;6003;2026-01-01 10:02:00",
+          "4;31;99999999999;2026-01-01 10:03:00",
+        ]),
+      );
+      const stats = await pollOnceForEvent(f.ctx.eventId);
+      expect(stats.inserted).toBe(2);
+
+      const punches = await f.ctx.db.punch.findMany({
+        where: { eventId: f.ctx.eventId, source: "online_input" },
+        select: { cardNo: true },
+      });
+      expect(punches.map((p) => p.cardNo).sort()).toEqual([6001, 6003]);
+      // The corrupt id never becomes the watermark; row 4 (bad card,
+      // sound id) is moved past so it is not fetched again.
+      expect((await readConfig(f.ctx.eventId)).lastId).toBe(4);
+      expect(
+        await getSetting(`online_input_${String(f.ctx.eventId)}_last_error`),
+      ).toBeNull();
+    } finally {
+      await teardown(f);
+    }
+  });
+
+  it("moves past a bad row that carries a sound id, so it is not refetched", async () => {
+    const f = await setupPuller("oi-tail");
+    try {
+      // Row 4 has a valid id but an out-of-range card: skipped, but the
+      // watermark moves past it, and the panel keeps showing a healthy poll.
+      f.fetchSpy.mockResolvedValueOnce(
+        rocBody([
+          "1;31;6201;2026-01-01 10:00:00",
+          "4;31;99999999999;2026-01-01 10:03:00",
+        ]),
+      );
+      await pollOnceForEvent(f.ctx.eventId);
+      expect((await readConfig(f.ctx.eventId)).lastId).toBe(4);
+
+      // A response made only of such a row is not "unexpected" either.
+      f.fetchSpy.mockResolvedValueOnce(rocBody(["5;31;1;2026-01-01 25:00:00"]));
+      expect(await pollOnceForEvent(f.ctx.eventId)).toEqual({ fetched: 1, inserted: 0 });
+      expect((await readConfig(f.ctx.eventId)).lastId).toBe(5);
+      expect(
+        await getSetting(`online_input_${String(f.ctx.eventId)}_last_error`),
+      ).toBeNull();
+
+      const caller = makeCaller(f.ctx.event);
+      expect((await caller.onlineInput.getStatus()).rowsSkipped).toBe(2);
+    } finally {
+      await teardown(f);
+    }
+  });
+
+  it("stores two identical punches in one response once", async () => {
+    const f = await setupPuller("oi-twice");
+    try {
+      f.fetchSpy.mockResolvedValueOnce(
+        rocBody([
+          "1;31;6301;2026-01-01 10:00:00",
+          "2;31;6301;2026-01-01 10:00:00",
+        ]),
+      );
+      expect(await pollOnceForEvent(f.ctx.eventId)).toEqual({ fetched: 2, inserted: 1 });
+      expect((await readConfig(f.ctx.eventId)).lastId).toBe(2);
+    } finally {
+      await teardown(f);
+    }
+  });
+
+  it("reports a non-ROC 200 body as an error and recovers on the next good poll", async () => {
+    const f = await setupPuller("oi-html");
+    try {
+      f.fetchSpy.mockResolvedValueOnce(
+        new Response(
+          "<!DOCTYPE html>\n<html><body><h1>Sign in</h1></body></html>\n",
+          { status: 200, headers: { "Content-Type": "text/html" } },
+        ),
+      );
+      const stats = await pollOnceForEvent(f.ctx.eventId);
+      expect(stats).toEqual({ fetched: 0, inserted: 0 });
+      const errKey = `online_input_${String(f.ctx.eventId)}_last_error`;
+      expect(await getSetting(errKey)).toMatch(/^Unexpected response: <!DOCTYPE html>/);
+      expect(
+        await getSetting(`online_input_${String(f.ctx.eventId)}_last_polled`),
+      ).toBeNull();
+      expect((await readConfig(f.ctx.eventId)).lastId).toBe(0);
+
+      f.fetchSpy.mockResolvedValueOnce(rocBody(["1;31;6101;2026-01-01 10:00:00"]));
+      expect((await pollOnceForEvent(f.ctx.eventId)).inserted).toBe(1);
+      expect(await getSetting(errKey)).toBeNull();
+    } finally {
+      await teardown(f);
+    }
+  });
+
+  it("an empty 200 body is still a healthy poll", async () => {
+    const f = await setupPuller("oi-empty");
+    try {
+      f.fetchSpy.mockResolvedValueOnce(new Response("", { status: 200 }));
+      await pollOnceForEvent(f.ctx.eventId);
+      expect(
+        await getSetting(`online_input_${String(f.ctx.eventId)}_last_error`),
+      ).toBeNull();
+      expect(
+        await getSetting(`online_input_${String(f.ctx.eventId)}_last_polled`),
+      ).not.toBeNull();
+    } finally {
+      await teardown(f);
+    }
+  });
+
+  it("a config save racing a watermark advance does not roll lastId back", async () => {
+    const f = await setupPuller("oi-cfg-race");
+    try {
+      const caller = makeCaller(f.ctx.event);
+      const key = cfgKey(f.ctx.eventId);
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let locked!: () => void;
+      const isLocked = new Promise<void>((r) => (locked = r));
+
+      // Stand-in for a poll: lock the row, wait while the save starts,
+      // then move the watermark the way advanceWatermark does and commit.
+      const poll = f.ctx.db.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT 1 FROM oxygen.settings WHERE key = ${key} FOR UPDATE`;
+          locked();
+          await gate;
+          await tx.$executeRaw`
+            UPDATE oxygen.settings
+               SET value = jsonb_set(value::jsonb, '{lastId}', to_jsonb(5::bigint))::text
+             WHERE key = ${key}
+          `;
+        },
+        { timeout: 10_000 },
+      );
+      await isLocked;
+
+      const save = caller.onlineInput.saveConfig({ unitId: "54321" });
+      // Give the save time to read the row (an unlocked read would see
+      // lastId 0 here and write it back after the poll commits).
+      await new Promise((r) => setTimeout(r, 300));
+      release();
+      await poll;
+      await save;
+
+      const cfg = await readConfig(f.ctx.eventId);
+      expect(cfg.unitId).toBe("54321");
+      expect(cfg.lastId).toBe(5);
+    } finally {
+      await teardown(f);
+    }
+  });
+
+  it("a poll waiting on a locked config row keeps the edit made under the lock", async () => {
+    const f = await setupPuller("oi-poll-wait");
+    try {
+      const key = cfgKey(f.ctx.eventId);
+      f.fetchSpy.mockResolvedValue(
+        rocBody(["1;31;6401;2026-01-01 10:00:00", "2;32;6402;2026-01-01 10:01:00"]),
+      );
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let locked!: () => void;
+      const isLocked = new Promise<void>((r) => (locked = r));
+
+      // Stand-in for a router write: lock, wait while the poll reaches its
+      // compare-and-set, then write the whole blob back with one change.
+      const edit = f.ctx.db.$transaction(
+        async (tx) => {
+          const rows = await tx.$queryRaw<{ value: string }[]>`
+            SELECT value FROM oxygen.settings WHERE key = ${key} FOR UPDATE`;
+          locked();
+          await gate;
+          const cfg = JSON.parse(rows[0].value);
+          cfg.unitId = "99999";
+          await tx.setting.update({ where: { key }, data: { value: JSON.stringify(cfg) } });
+        },
+        { timeout: 10_000 },
+      );
+      await isLocked;
+      const poll = pollOnceForEvent(f.ctx.eventId);
+      await new Promise((r) => setTimeout(r, 300));
+      release();
+      await edit;
+      const stats = await poll;
+
+      expect(stats.inserted).toBe(2);
+      const cfg = await readConfig(f.ctx.eventId);
+      expect(cfg.unitId).toBe("99999");
+      expect(cfg.lastId).toBe(2);
+    } finally {
+      await teardown(f);
+    }
+  });
+
+  it("router writes create the config row when there is none", async () => {
+    const ctx = await createTestEvent("oi-fresh");
+    try {
+      const caller = makeCaller(ctx.event);
+      await caller.onlineInput.addMapping({ rawCode: 150, target: 3 });
+      const cfg = await readConfig(ctx.eventId);
+      expect(cfg.mapping).toEqual({ "150": 3 });
+      expect(cfg.lastId).toBe(0);
+      expect(cfg.intervalSeconds).toBe(10);
+    } finally {
+      await setSetting(cfgKey(ctx.eventId), null);
+      await ctx.cleanup();
     }
   });
 });

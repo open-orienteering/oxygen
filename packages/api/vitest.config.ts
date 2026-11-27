@@ -3,6 +3,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
+    // The server runs in UTC in the Docker and Cloud Run images, while events
+    // default to Europe/Stockholm: pin it, so a process-zone mix-up fails
+    // here and on every laptop alike (BLD-14).
+    env: { TZ: "UTC" },
     include: ["src/**/__tests__/**/*.test.ts"],
     // Integration tests have their own config and require a live MySQL instance
     exclude: ["src/__tests__/integration/**"],

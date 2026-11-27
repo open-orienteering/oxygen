@@ -14,7 +14,10 @@ import { parseOcadMapMetadata } from "../helpers/ocad-oracle.js";
 import type { AuthUser } from "../../auth.js";
 import { grantSystemGroup } from "../../permissions.js";
 import { SYSTEM_GROUP_IDS } from "@oxygen/shared";
+import { awaitContourIntervalJobs } from "../../map-store/contour-interval-apply.js";
 import { registerBackupRoute } from "../../backup.js";
+import { registerMapSourceRoutes } from "../../map-store/source-routes.js";
+import { uploadMapSource } from "../helpers/upload-map.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -194,7 +197,7 @@ describe("club map library", () => {
       authEnabled: true,
       identityEmail: uploader.email,
     });
-    const created = await uploadClubMap(asUploader, buf, "owned.ocd");
+    const created = await uploadClubMap(asUploader, buf, "owned.ocd", undefined, { as: uploader });
     seriesIds.push(created.id);
 
     const asStranger = makeCaller(null, {
@@ -358,7 +361,7 @@ describe("club map library", () => {
       authEnabled: true,
       identityEmail: uploader.email,
     });
-    const created = await uploadClubMap(asUploader, buf, "secret.ocd");
+    const created = await uploadClubMap(asUploader, buf, "secret.ocd", undefined, { as: uploader });
     seriesIds.push(created.id);
 
     const asStranger = makeCaller(null, {
@@ -415,7 +418,7 @@ describe("club map library", () => {
       identityEmail: admin.email,
     });
 
-    await uploadEventMap(asManager, ctx.nameId, buf, "own.ocd");
+    await uploadEventMap(asManager, ctx.nameId, buf, "own.ocd", { as: manager });
     const own = await asManager.course.downloadMap();
     expect(own?.fileName).toBe("own.ocd");
     // The bytes come from map_sources (E5: no copy on map_files).
@@ -429,6 +432,34 @@ describe("club map library", () => {
     });
     const adminDl = await asAdmin.course.downloadMap();
     expect(adminDl?.fileName).toBe("library.ocd");
+  });
+
+  it("a club map's contour interval changes only by its uploader or an admin, from the library or from an event on it (docs/course-elevation.md §0.43)", async () => {
+    const buf = readFileSync(FIXTURE);
+    const mk = async (tag: string, isAdmin: boolean) =>
+      asUser(await ctx.db.user.create({ data: { email: `${tag}-${suffix}@club-map-test.example`, displayName: tag, isAdmin, active: true } }));
+    const manager = await mk("iv-mgr", false);
+    const admin = await mk("iv-adm", true);
+    await grantSystemGroup(ctx.db, { eventId: ctx.eventId, userId: manager.id, groupId: SYSTEM_GROUP_IDS.eventAdmin, grantedBy: admin.id });
+    const as = (user: typeof manager, withEvent: boolean) => makeCaller(withEvent ? ctx.event : null, { user, authEnabled: true, identityEmail: user.email });
+    const library = await uploadClubMap(as(admin, true), buf, "interval-lib.ocd");
+    seriesIds.push(library.id);
+    await as(manager, true).course.useClubMap({ clubMapId: library.id });
+
+    // The event manager is neither the uploader nor an admin: refused from the library and from the event.
+    await expect(as(manager, false).clubMap.setContourInterval({ id: library.id, intervalM: 2.5 })).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringContaining("uploader") });
+    await expect(as(manager, true).course.setContourInterval({ intervalM: 2.5 })).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringContaining("uploader") });
+    expect((await ctx.db.clubMap.findUniqueOrThrow({ where: { id: library.id } })).contourIntervalM).toBeNull();
+
+    // The list says who may, so the UI can hide the controls.
+    expect((await as(manager, false).clubMap.list()).find((m) => m.id === library.id)!.mayChange).toBe(false);
+    expect((await as(admin, false).clubMap.list()).find((m) => m.id === library.id)!.mayChange).toBe(true);
+    // An admin may, both ways.
+    await as(admin, false).clubMap.setContourInterval({ id: library.id, intervalM: 2.5 });
+    expect((await ctx.db.clubMap.findUniqueOrThrow({ where: { id: library.id } })).contourIntervalM).toBe(2.5);
+    await as(admin, true).course.setContourInterval({ intervalM: null });
+    expect((await ctx.db.clubMap.findUniqueOrThrow({ where: { id: library.id } })).contourIntervalM).toBeNull();
+    await awaitContourIntervalJobs();
   });
 
   it("requires instance admin to back up an event whose map came from the club library", async () => {
@@ -495,4 +526,68 @@ describe("club map library", () => {
       await server.close();
     }
   });
+});
+
+describe("a source is consumed by possession, not by quoting its hash (API-17 / MAP-4)", () => {
+  const mkUser = async (label: string, isAdmin = false): Promise<AuthUser> =>
+    asUser(
+      await ctx.db.user.create({
+        data: { email: `${label}-${suffix}@club-map-test.example`, displayName: label, isAdmin, active: true },
+      }),
+    );
+  const signedIn = (user: AuthUser, event: typeof ctx.event | null = null) =>
+    makeCaller(event, { user, authEnabled: true, identityEmail: user.email });
+
+  it("addFromSource and applyUploadedMap refuse another user's hash until the caller uploads the bytes too", async () => {
+    // Own bytes: the source row is global, other suites share the plain fixture.
+    const buf = Buffer.concat([readFileSync(FIXTURE), Buffer.from(`possession-${suffix}`)]);
+    const owner = await mkUser("pos-owner");
+    const other = await mkUser("pos-other");
+    const manager = await mkUser("pos-manager");
+    const admin = await mkUser("pos-admin", true);
+    await grantSystemGroup(ctx.db, { eventId: ctx.eventId, userId: manager.id, groupId: SYSTEM_GROUP_IDS.eventAdmin, grantedBy: admin.id });
+
+    const created = await uploadClubMap(signedIn(owner), buf, "private.ocd", undefined, { as: owner });
+    seriesIds.push(created.id);
+    const fileHash = sha256(buf);
+
+    // The hash alone does nothing for anyone else.
+    await expect(signedIn(other).clubMap.addFromSource({ fileHash })).rejects.toMatchObject({ code: "FORBIDDEN", message: "Upload the file again" });
+    // A setter of another event, with courses.edit there, is refused the same way.
+    await expect(signedIn(manager, ctx.event).course.applyUploadedMap({ fileHash })).rejects.toMatchObject({ code: "FORBIDDEN", message: "Upload the file again" });
+    // Nor does the download route open: the uploader and admins only.
+    await expect(signedIn(other).clubMap.download({ id: created.id })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const server = Fastify();
+    registerMapSourceRoutes(server);
+    const previousMode = process.env.AUTH_MODE;
+    process.env.AUTH_MODE = "proxy";
+    try {
+      const get = (email: string) => server.inject({ method: "GET", url: `/api/map-sources/${fileHash}`, headers: { "x-forwarded-email": email } });
+      expect((await get(other.email)).statusCode).toBe(403);
+      expect((await get(owner.email)).statusCode).toBe(200);
+    } finally {
+      if (previousMode === undefined) delete process.env.AUTH_MODE;
+      else process.env.AUTH_MODE = previousMode;
+      await server.close();
+    }
+
+    // The owner may use their own bytes; an admin may use any.
+    const adminCopy = await signedIn(admin).clubMap.addFromSource({ fileHash, name: `admin ${suffix}` });
+    seriesIds.push(adminCopy.id);
+    await expect(signedIn(manager, ctx.event).course.applyUploadedMap({ fileHash })).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    // Having the bytes (uploading them, a deduplicated finalise) is the way in, and the uploader is the one who did.
+    await uploadMapSource(buf, "mine.ocd", { as: other });
+    const mine = await signedIn(other).clubMap.addFromSource({ fileHash, fileName: "mine.ocd", name: `other ${suffix}` });
+    seriesIds.push(mine.id);
+    expect(mine.importJob?.state).toBe("done");
+    const version = await ctx.db.clubMapVersion.findFirstOrThrow({ where: { clubMapId: mine.id } });
+    expect(version.uploadedBy).toBe(other.id);
+    expect(version.label).toBe("mine.ocd");
+    await expect(signedIn(other).clubMap.download({ id: mine.id })).resolves.toBeDefined();
+
+    // Event side: the manager uploads under the event's scope, then applies.
+    await uploadMapSource(buf, "event.ocd", { as: manager, eventNameId: ctx.nameId });
+    await expect(signedIn(manager, ctx.event).course.applyUploadedMap({ fileHash, fileName: "event.ocd" })).resolves.toMatchObject({ success: true });
+  }, 60_000);
 });

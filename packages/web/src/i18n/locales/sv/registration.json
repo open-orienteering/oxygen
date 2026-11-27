@@ -50,7 +50,6 @@
   "registrationConfig": "Anmälningsinställningar",
   "allowOnSiteRegistration": "Tillåt anmälan på plats",
   "defaultPaymentMode": "Standard betalningssätt",
-
   "waitingForCard": "Väntar på SI-bricka...",
   "insertCardOrEnterManually": "Sätt in en bricka i läsaren, eller ange bricknummer manuellt",
   "cardNumber": "Bricknummer",
@@ -82,5 +81,10 @@
   "clubSource": "Klubb",
   "runnerDbSource": "Löpar-DB",
   "duplicateCardWarning": "Bricka {{cardNo}} är redan tilldelad {{name}} ({{className}})",
-  "stickyMode": "Hållbart läge"
+  "stickyMode": "Hållbart läge",
+  "invalidClockTime": "Starttiden måste vara en klocktid, till exempel 10:30 eller 10:30:15.",
+  "errorCardTaken": "Brickan är redan tilldelad en annan löpare i tävlingen. Använd en annan bricka, eller byt bricka på den andra löparen först.",
+  "errorForbidden": "Du har inte behörighet att anmäla löpare. Logga in med ett konto för tävlingsfunktionär eller tävlingsadmin.",
+  "errorNotFound": "Klassen eller banan finns inte längre. Välj klass igen.",
+  "errorUnreachable": "Servern gick inte att nå. Inget sparades; försök igen."
 }

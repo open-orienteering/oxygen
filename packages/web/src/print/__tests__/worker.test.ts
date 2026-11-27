@@ -133,6 +133,15 @@ describe("print worker (§8.6)", () => {
     expect((await ok.compose(fixturePrintJob())).type).toBe("done");
   });
 
+  it("a hiding graphic it cannot fetch answers error with the error's name, so the store step can tell it (CRS-010)", async () => {
+    const job = fixturePrintJob();
+    const course = job.sheets[0].course as unknown as { objects: unknown[] };
+    course.objects = [...course.objects, { id: "h", kind: "image", geometry: [{ x: -20, y: 0 }, { x: -10, y: 10 }], props: { graphicId: 7, hideControlCircle: true }, attach: { controlId: "A", at: { x: -15, y: 5 } } }];
+    const h = harness((n) => (n.what === "document" ? copy(printDocumentBytes()) : "print.png 404"));
+    const out = await h.compose(job);
+    expect(out).toMatchObject({ type: "error", id: 1, name: "PrintGraphicMissingError" });
+  });
+
   it("refuses to compose before init", async () => {
     const out: PrintWorkerResponse[] = [];
     const w = createPrintWorker((m) => out.push(m));

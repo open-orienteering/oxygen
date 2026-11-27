@@ -16,6 +16,7 @@ import {
 import { makeCaller } from "../helpers/caller.js";
 import { uploadEventMap } from "../helpers/upload-map.js";
 import { parseOcadMapMetadata } from "../helpers/ocad-oracle.js";
+import { acquireLease, releaseLease } from "../../sync/lease.js";
 import { loadEventCrs } from "../../event-crs.js";
 import { mapMmToWgs84 } from "../../map-projection.js";
 
@@ -110,6 +111,44 @@ describe("course.setMapRotation", () => {
       expect(derivedAfter.legs).toMatch(/^\d+;$/);
       // Lengths stay as stored on a map change (updateLength: false); only the legs follow.
       expect(derivedAfter.lengthM).toBe(before.lengthM);
+    } finally {
+      await caller.course.setMapRotation({ degrees: 0 });
+    }
+  });
+
+  it("while a venue box holds the lease, the map change goes ahead but no course row is re-derived or journaled (D8)", async () => {
+    await ctx.db.control.createMany({ data: [{ eventId: ctx.eventId, codes: "51", xpos: 10, ypos: 10 }, { eventId: ctx.eventId, codes: "52", xpos: 40, ypos: 10 }] });
+    const derived = await caller.course.create({ name: "Held", controlIds: [51, 52] });
+    const row = await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: derived.id } });
+    await ctx.db.course.update({ where: { id: row.id }, data: { legs: "stale;" } });
+    const journaled = () => ctx.db.journalEntry.count({ where: { eventId: ctx.eventId, type: "course.upserted" } });
+    const before = await journaled();
+    await acquireLease(ctx.db, ctx.eventId, "venue-d8");
+    try {
+      const res = await caller.course.setMapRotation({ degrees: 4 });
+      expect(res.rotationCorrection).toBe(4);
+      expect((await ctx.db.course.findUniqueOrThrow({ where: { id: row.id } })).legs).toBe("stale;");
+      expect(await journaled()).toBe(before);
+    } finally {
+      await releaseLease(ctx.db, ctx.eventId);
+      await caller.course.setMapRotation({ degrees: 0 });
+    }
+    // Without the lease the same change re-derives and journals again.
+    expect((await ctx.db.course.findUniqueOrThrow({ where: { id: row.id } })).legs).not.toBe("stale;");
+    expect(await journaled()).toBeGreaterThan(before);
+  });
+
+  it("a computed climb cleared by a map change is journaled even on a course whose length is not derived (§6)", async () => {
+    const file = await ctx.db.course.create({ data: { eventId: ctx.eventId, name: "File with climb", lengthM: 900, legs: "900;", lengthSource: "file", climbM: 41, climbSource: "computed" } });
+    const latest = async () => {
+      const e = await ctx.db.journalEntry.findFirst({ where: { eventId: ctx.eventId, type: "course.upserted", payload: { path: ["id"], equals: file.id } }, orderBy: { hlc: "desc" } });
+      return e ? (e.payload as { fields: { climbM: number } }).fields.climbM : null;
+    };
+    expect(await latest()).toBeNull();
+    await caller.course.setMapRotation({ degrees: 6 });
+    try {
+      expect(await latest()).toBe(0);
+      expect((await ctx.db.course.findUniqueOrThrow({ where: { id: file.id } })).climbSource).toBeNull();
     } finally {
       await caller.course.setMapRotation({ degrees: 0 });
     }

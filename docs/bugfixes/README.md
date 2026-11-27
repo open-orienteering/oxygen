@@ -45,6 +45,9 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [Course and print correctness: description sheets per variant, setter maps missing new controls, hiding graphics, unplaced control numbers, class course change, `.ppen` XML](course-print-correctness.md) (follow-ups: [course-print-followups.md](course-print-followups.md)) | 2026-11-27 |
+| [Course elevation before PR #254 merges: lease guard for background jobs, one route worker per refresh, clears that journal, contour interval confirmed per map, Eventor course switch](course-elevation-review.md) (follow-ups: [course-elevation-followups.md](course-elevation-followups.md)) | 2026-11-27 |
+| [An empty or wrong course file wiped the event's courses; re-import reset control settings](course-import-safety.md) (follow-ups: [course-import-followups.md](course-import-followups.md)) | 2026-11-26 |
 | [Two prints a second apart hashed differently with the same drawing](printed-drawing-hash.md) | 2026-11-17 |
 | [An image course object printed without its graphic](course-object-image-print.md) | 2026-11-13 |
 | [The toner saver let text and out-of-bounds areas show outside it](toner-saver-draw-order.md) | 2026-11-07 |
@@ -62,6 +65,24 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [Ties got different places; the receipt, offline readout and Eventor upload disagreed with the result list](results-and-lists.md) | 2026-11-26 |
+| [Results and lists: what package 13 left out](results-and-lists-followups.md) | 2026-11-26 |
+| [ROC radio intake stalled after a reset, and the control mapping was never applied](roc-radio-intake.md) | 2026-11-26 |
+| [ROC radio intake: what package 12 left out](roc-radio-intake-followups.md) | 2026-11-26 |
+| [Registration desk stored wrong clubs, names and cards; offline registrations lost fields](registration-correctness.md) | 2026-11-26 |
+| [LiveResults: two nodes pushed one event, and each cycle deleted the runners in the forest](liveresults-single-owner-and-incremental-push.md) (follow-ups: [liveresults-followups.md](liveresults-followups.md)) | 2026-11-26 |
+| [Registration: follow-ups left out of package 10](registration-followups.md) | 2026-11-26 |
+| [A station went down for the whole outage although its data was cached](station-outage-resilience.md) | 2026-11-26 |
+| [Station outage resilience: what package 9 left out](station-outage-followups.md) | 2026-11-26 |
+| [A start at ZeroTime read as "no start", early starters vanished, and station clocks ran in UTC](zerotime-and-time-zone.md) | 2026-11-26 |
+| [ZeroTime and time zone follow-ups: review items left as they are](zerotime-followups.md) | 2026-11-26 |
+| [SI card protocol: SI8 punches read from the owner area, half-read cards filed, clock-skewed punches lost](si-card-protocol.md) | 2026-11-25 |
+| [SI card protocol: what package 6 left out](si-card-protocol-followups.md) | 2026-11-25 |
+| [Venue edits of event settings reverted every 5 minutes and never reached the cloud](settings-refresh-venue-edits.md) (follow-ups: [settings-refresh-followups.md](settings-refresh-followups.md)) | 2026-11-26 |
+| [Venue shipping, checkout and the lease lost or duplicated data](venue-shipping-and-lease.md) | 2026-11-25 |
+| [The journal sink trusted whatever it was sent](journal-sink-hardening.md) | 2026-11-25 |
+| [Offline and kiosk readouts lost or applied to the wrong runner](offline-kiosk-readout-path.md) | 2026-11-24 |
+| [A re-read or a manual finish overwrote the stored result](readout-overwrites-result.md) | 2026-11-24 |
 | [SIAC readouts with a battery value rejected by `storeReadout`](readout-battery-millivolts.md) | 2026-11-18 |
 | [Programmed controls never reached the Controls list](control-programming-battery-units.md) | 2026-08-25 |
 | [Radio-equipped check stations never got autosend](check-station-autosend.md) | 2026-08-25 |
@@ -76,6 +97,12 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [Proxy-mode authorisation gaps (runner directory, map sources, venue forwarding) and stored XSS through SVG graphics](proxy-auth-and-svg-xss.md) (follow-ups: [proxy-auth-followups.md](proxy-auth-followups.md)) | 2026-11-27 |
+| [Test Lab could wipe a live event; unchecked statuses and times; dead endpoints](test-lab-live-event-guard.md) | 2026-11-27 |
+| [Test Lab guard: follow-ups left out of package 19](test-lab-followups.md) | 2026-11-27 |
+| [Runner editor dropped edits behind "Saved" and refused saves silently](runner-inline-editor.md) | 2026-11-26 |
+| [Runner editor: follow-ups left out of package 11](runner-inline-editor-followups.md) | 2026-11-26 |
+| [Draw safety: a redraw rewrote started runners, the draw was not atomic, and Apply differed from the preview](draw-safety.md) | 2026-11-26 |
 | [Demo Competition courses read no controls](showcase-stale-course-structure.md) | 2026-11-07 |
 | [Runner search failed in given-name order](runner-name-search-order.md) | 2026-09-19 |
 | [`OXYGEN_ADMIN_EMAILS` silently did nothing for existing accounts](bootstrap-admin-not-reconciled.md) | 2026-09-02 |
@@ -90,6 +117,9 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 | [Runner directory sync timed out in the cloud](runner-directory-sync-timeout.md) | 2026-09-19 |
 | [Google Sheets webhook URL leaked across events](sheets-webhook-cache.md) | 2026-09-02 |
 | [LiveResults radio codes, shared tavid, hashed login](liveresults-radio-codes-and-shared-tavid.md) | 2026-08-25 |
+| [Eventor re-sync cancelled finished runners and reverted desk edits](eventor-resync-data-loss.md) | 2026-11-26 |
+| [Eventor import was not atomic and wrote absolute times](eventor-import-atomic.md) | 2026-11-26 |
+| [Eventor sync follow-ups: review items left as they are](eventor-sync-followups.md) | 2026-11-26 |
 | [Eventor course lengths in IOF CourseData export](eventor-course-lengths.md) | 2026-08-25 |
 | [Eventor import fails on cardless runners (unique constraint on `event_id, card_no`)](eventor-import-cardless-runners.md) | 2026-08-13 |
 
@@ -97,17 +127,21 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [Process stability: a stray rejection, a bad map file or a hung peer could stop the API](process-stability.md) (follow-ups: [process-stability-followups.md](process-stability-followups.md)) | 2026-11-27 |
+| [Deploy and venue setup: dropped variables, IAP wiring, unmigrated boxes, unverified images](deploy-venue-setup.md) (follow-ups: [deploy-venue-followups.md](deploy-venue-followups.md)) | 2026-11-27 |
+| [The event backup was incomplete, failed silently and could not be restored](event-backup-restore.md) (follow-ups: [backup-restore-followups.md](backup-restore-followups.md)) | 2026-11-26 |
 | [Performance: polling endpoints and per-request auth round trips](perf-polling-and-auth-round-trips.md) | 2026-09-24 |
 | [GitHub Actions Node 20 runtime warnings](gha-node20-actions.md) | 2026-09-19 |
 | [Cloud Shell demo required pnpm and a source build](cloud-shell-demo-ghcr.md) | 2026-09-19 |
 | [Cloud SQL "handshake failed … EOF" after raising max instances](cloud-sql-handshake-eof.md) | 2026-09-07 |
-| [PWA "Event not found" after dormancy (expired IAP)](pwa-iap-session-recovery.md) | 2026-09-05 |
+| [PWA "Event not found" after dormancy (expired IAP)](pwa-iap-session-recovery.md) (superseded in part by [station-outage-resilience.md](station-outage-resilience.md)) | 2026-09-05 |
 | [A tab could keep running an old web bundle after a deploy](stale-web-bundle-after-deploy.md) | 2026-08-25 |
 
 ## E2E and test infrastructure
 
 | Note | Added |
 | --- | --- |
+| [webserial.spec readout tests held by the readout guard (SI6 card, no finish)](webserial-spec-held-by-readout-guard.md) | 2026-11-25 |
 | [`map-multicourse.spec.ts` left its imported courses behind](e2e-map-multicourse-leaves-courses.md) | 2026-11-14 |
 | [E2E flakes in `course-editor-legs.spec.ts`: presence chips moved the map, an apex on another leg](course-editor-legs-flakes.md) | 2026-11-13 |
 | [F7's control into B was placed under the inspector](f7-offleg-under-inspector.md) | 2026-11-11 |

@@ -20,8 +20,11 @@ export function CapabilitiesProvider({ children }: { children: ReactNode }) {
   );
   const value: CapabilitiesValue = {
     capabilities,
-    loaded: q.isSuccess,
-    has: (cap) => !q.isSuccess || (capabilities?.has(cap) ?? false),
+    loaded: capabilities !== null,
+    // Fails open only while nothing is known (the server checks anyway). A
+    // failed refetch keeps the last answer: during an outage the cached
+    // capabilities still decide, not "everything allowed" (WEB-03).
+    has: (cap) => (capabilities ? capabilities.has(cap) : true),
   };
   return (
     <CapabilitiesContext.Provider value={value}>

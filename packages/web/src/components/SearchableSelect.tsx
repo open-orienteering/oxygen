@@ -30,6 +30,7 @@ export function SearchableSelect({
   className = "",
   testId,
   alwaysShowSearch = false,
+  onSearchChange,
 }: {
   value: number | string;
   onChange: (value: number | string) => void;
@@ -41,6 +42,11 @@ export function SearchableSelect({
   testId?: string;
   /** Always show the search input, even with few options */
   alwaysShowSearch?: boolean;
+  /**
+   * Called with the search text as it changes ("" when the popup closes), so
+   * the caller can add options from elsewhere (the club directory, WEB-11).
+   */
+  onSearchChange?: (search: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -54,6 +60,12 @@ export function SearchableSelect({
   const [popupStyle, setPopupStyle] = useState<React.CSSProperties | null>(null);
 
   const selected = options.find((o) => o.value === value);
+
+  const onSearchChangeRef = useRef(onSearchChange);
+  onSearchChangeRef.current = onSearchChange;
+  useEffect(() => {
+    onSearchChangeRef.current?.(search);
+  }, [search]);
 
   // Close on outside click. The popup may live outside `containerRef` visually
   // (via fixed positioning), but it's still a DOM child of `containerRef`, so

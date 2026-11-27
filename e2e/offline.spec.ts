@@ -12,6 +12,9 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { API_BASE } from "./helpers/api-base";
+import { getMockWebSerialScript } from "./helpers/mock-webserial";
+import { connectMockSerialReader } from "./helpers/reader";
+import { reseed } from "./helpers/reseed";
 
 const COMPETITION_NAME = "My example tävling";
 const NAMEID = "itest";
@@ -254,6 +257,60 @@ test.describe("Offline Support", () => {
     await deleteRunnerByName(request, runnerName);
   });
 
+  test("an offline registration keeps club, birth year and phone after sync (SYNC-12)", async ({
+    page,
+    context,
+    request,
+  }) => {
+    const runnerName = "E2E Offline Full " + Date.now();
+    // A roster club to pick (any runner's Eventor club in the seed).
+    const listResp = await request.get(`${API_BASE}/trpc/runner.list`, { headers: { "x-competition-id": NAMEID } });
+    const roster = ((await listResp.json())?.result?.data ?? []) as Array<{ clubName: string; clubId: number }>;
+    const club = roster.find((r) => r.clubId > 0 && r.clubName)!;
+    expect(club).toBeTruthy();
+
+    await selectCompetition(page);
+    await warmStationCache(page);
+    // Open the dialog once online so the club list is cached.
+    await page.getByRole("button", { name: /Add runner|Lägg till/i }).click();
+    const dialog = page.getByTestId("registration-dialog");
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    await expect(dialog.getByTestId("reg-club").getByRole("button").first()).toBeVisible();
+    await page.waitForTimeout(500);
+    await page.getByRole("button", { name: "Close" }).click();
+
+    await context.setOffline(true);
+    await page.getByRole("button", { name: /Add runner|Lägg till/i }).click();
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    await dialog.locator("input[placeholder='First Last']").fill(runnerName);
+    await dialog.getByTestId("reg-club").getByRole("button").first().click();
+    await page.getByPlaceholder("Search clubs...").fill(club.clubName);
+    await page.getByRole("button", { name: club.clubName, exact: true }).first().click();
+    await dialog.locator("input[placeholder='e.g. 1990']").fill("1977");
+    await dialog.locator("input[placeholder='+46...']").fill("0701112233");
+    const classSelect = dialog.getByTestId("reg-class");
+    await classSelect.getByRole("button").click();
+    await classSelect.getByText("Öppen 3").click();
+    await dialog.getByTestId("reg-submit").click();
+    await expect(dialog).not.toBeVisible({ timeout: 10000 });
+
+    await context.setOffline(false);
+    await expect(async () => {
+      expect(await getPendingEventCount(page)).toBe(0);
+    }).toPass({ intervals: [1000, 1000, 2000, 2000, 3000], timeout: 15000 });
+
+    const after = await request.get(`${API_BASE}/trpc/runner.list`, { headers: { "x-competition-id": NAMEID } });
+    const created = ((await after.json())?.result?.data ?? []).find(
+      (r: { name: string }) => r.name === runnerName,
+    ) as { clubName: string; clubId: number; birthYear: number } | undefined;
+    expect(created).toBeTruthy();
+    expect(created!.clubName).toBe(club.clubName);
+    expect(created!.clubId).toBe(club.clubId);
+    expect(created!.birthYear).toBe(1977);
+
+    await deleteRunnerByName(request, runnerName);
+  });
+
   test("should show pending count in sync indicator while offline", async ({
     page,
     context,
@@ -336,6 +393,23 @@ test.describe("Offline Support", () => {
     await expect(page.getByTestId("sync-failed-panel")).toContainText(
       "punch.recorded",
     );
+    // The refusal is shown as text, not as the raw code. An older server's
+    // free text would show as sent, so accept either translated code.
+    const failedPanel = page.getByTestId("sync-failed-panel");
+    await expect(failedPanel).not.toContainText(/INVALID_PAYLOAD|APPLY_FAILED/);
+    await expect(failedPanel).toContainText(
+      /malformed|could not apply|felaktig|kunde inte tillämpa/i,
+    );
+
+    // Retry all requeues it; the drain fails it again, so attempts reach 2.
+    await page.getByTestId("sync-retry-all").click();
+    await expect(async () => {
+      const events = await getAllEvents(page);
+      const poison = events.find((e) => e.type === "punch.recorded");
+      expect(poison?.status).toBe("failed");
+      expect((poison as unknown as { attempts: number }).attempts).toBe(2);
+    }).toPass({ intervals: [500, 1000, 2000], timeout: 15000 });
+    await expect(failedPanel).toBeVisible();
 
     // Discard it (deliberate operator action behind a confirm).
     page.on("dialog", (dialog) => dialog.accept());
@@ -400,5 +474,169 @@ test.describe("Offline Support", () => {
     await page.evaluate(() =>
       localStorage.removeItem("oxygen-offline-projection"),
     );
+  });
+});
+
+// ─── Offline readout paths (BLD-23; SYNC-03, MC-04, SYNC-24) ──────────────
+
+declare global {
+  interface Window {
+    __siMock: { insertCard(cardNumber: number, punches?: Array<{ controlCode: number; time: number }>): boolean };
+  }
+}
+
+test.describe("Offline readout", () => {
+  test.beforeAll(async () => {
+    await reseed();
+  });
+  test.afterAll(async () => {
+    await reseed();
+  });
+
+  test("a card read in the admin shell with the network down is queued, then drains", async ({
+    page,
+    context,
+    request,
+  }) => {
+    await page.addInitScript(getMockWebSerialScript());
+    await selectCompetition(page);
+    await warmStationCache(page);
+    await page.goto(`/${NAMEID}/card-readout`);
+    await connectMockSerialReader(page, 5000);
+    // The card-readout page prefetches the runner list and dashboard.
+    await page.waitForTimeout(1500);
+
+    await context.setOffline(true);
+    const cardNo = 500803; // a seeded runner (Monica Henriksson)
+    await page.evaluate((cardNo) => window.__siMock.insertCard(cardNo, []), cardNo);
+
+    await expect(async () => {
+      const events = await getAllEvents(page);
+      const read = events.find((e) => e.type === "card.read" && (e.payload as { cardNo?: number }).cardNo === cardNo);
+      expect(read).toBeDefined();
+      expect(read!.status).toBe("pending");
+    }).toPass({ timeout: 10000 });
+
+    await context.setOffline(false);
+    await expect(async () => {
+      expect(await getPendingEventCount(page)).toBe(0);
+    }).toPass({ intervals: [1000, 1000, 2000, 2000, 3000], timeout: 20000 });
+    const synced = (await getAllEvents(page)).find(
+      (e) => e.type === "card.read" && (e.payload as { cardNo?: number }).cardNo === cardNo,
+    );
+    expect(synced!.status).toBe("synced");
+    void request;
+  });
+
+  test("Finish Station offline: Finish queues finish.recorded and drains", async ({ page, context }) => {
+    await selectCompetition(page);
+    await warmStationCache(page);
+    await page.goto(`/${NAMEID}/finish-station`);
+    const cardInput = page.locator('input[type="number"]').first();
+    await expect(cardInput).toBeVisible({ timeout: 10000 });
+    await page.waitForTimeout(1500);
+    // Look the runner up online first so the lookup result is in the cache.
+    await cardInput.fill("500803");
+    await expect(page.getByText("Monica Henriksson")).toBeVisible({ timeout: 10000 });
+
+    await context.setOffline(true);
+    // A seeded runner that already has a finish gets the explicit replace
+    // button (WEB-53); its offline write is a runner patch, a first finish
+    // is `finish.recorded`.
+    await page.getByTestId("record-finish").click();
+
+    await expect(async () => {
+      const events = await getAllEvents(page);
+      const fin = events.find((e) => e.type === "finish.recorded" || e.type === "runner.updated");
+      expect(fin).toBeDefined();
+      expect(fin!.status).toBe("pending");
+    }).toPass({ timeout: 10000 });
+
+    await context.setOffline(false);
+    await expect(async () => {
+      expect(await getPendingEventCount(page)).toBe(0);
+    }).toPass({ intervals: [1000, 1000, 2000, 2000, 3000], timeout: 20000 });
+  });
+
+  test("a queued entry reaches its own competition after switching", async ({
+    page,
+    request,
+  }) => {
+    const runnerName = "E2E Switched Runner " + Date.now();
+    await selectCompetition(page);
+
+    const classes = await (
+      await request.get(`${API_BASE}/trpc/class.list`, {
+        headers: { "x-competition-id": NAMEID },
+      })
+    ).json();
+    const classSeq = (classes?.result?.data as Array<{ id: number }>)[0].id;
+
+    // A pending registration made in `itest`, injected while the page shows
+    // the other event: its header must come from the entry, not the URL.
+    await page.evaluate(() => {
+      window.history.pushState({}, "", "/itest_multirace/runners");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await page.evaluate(
+      async ({ name, classId }) => {
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const req = indexedDB.open("oxygen-offline");
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction("events", "readwrite");
+          tx.objectStore("events").put({
+            id: crypto.randomUUID(),
+            type: "runner.registered",
+            competitionId: "itest",
+            stationId: "e2e-switch",
+            timestamp: Date.now(),
+            hlc: { physical: Date.now(), logical: 0 },
+            schemaVersion: 1,
+            actorId: null,
+            payload: { tempId: crypto.randomUUID(), name, classId, cardNo: null },
+            status: "pending",
+            attempts: 0,
+          });
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        });
+        db.close();
+      },
+      { name: runnerName, classId: classSeq },
+    );
+
+    await expect(async () => {
+      expect(await getPendingEventCount(page)).toBe(0);
+    }).toPass({ intervals: [1000, 2000, 2000, 3000], timeout: 20000 });
+
+    expect(await runnerExistsInDb(request, runnerName)).toBe(true);
+    const other = await (
+      await request.get(`${API_BASE}/trpc/runner.list`, {
+        headers: { "x-competition-id": "itest_multirace" },
+      })
+    ).json();
+    const otherRunners = (other?.result?.data ?? []) as Array<{ name: string }>;
+    expect(otherRunners.some((r) => r.name === runnerName)).toBe(false);
+
+    await deleteRunnerByName(request, runnerName);
+  });
+
+  test("opening another event offline never shows the previous event's runners", async ({ page, context }) => {
+    await selectCompetition(page);
+    await warmStationCache(page);
+    await expect(page.getByText("Monica Henriksson")).toBeVisible({ timeout: 10000 });
+
+    // Event B has never been opened in this browser profile.
+    await context.setOffline(true);
+    await page.evaluate(() => {
+      window.history.pushState({}, "", "/itest_multirace/runners");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await page.waitForTimeout(2000);
+    await expect(page.getByText("Monica Henriksson")).toHaveCount(0);
+    await context.setOffline(false);
   });
 });

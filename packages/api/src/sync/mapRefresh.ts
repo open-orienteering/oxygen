@@ -24,7 +24,10 @@ import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import type { EventRef } from "../db.js";
 import { getActiveLease, NULLABLE_JSON_OBJECT_FIELDS, NULLABLE_JSON_SHEET_FIELDS, TOKEN_TABLES, type LeasePeer, type TokenTable } from "./lease.js";
 import { nodeId } from "./nodeIdentity.js";
-import { withoutDroppedFields } from "./dropped-columns.js";
+import { knownFields } from "./knownFields.js";
+import { mayRunBackgroundJob } from "../background-lease.js";
+import { clearComputedClimbs } from "../course-geometry.js";
+import { refreshComputedClimbs } from "../course-climb.js";
 import {
   applyTokens,
   createSnapshotMapFiles,
@@ -322,7 +325,7 @@ export async function applyMapRows(
 ): Promise<MapRefreshResult> {
   // (1) Blobs, append-only. (2) The event's map files, as a set.
   await insertSnapshotBlobs(tx, rows.maps, blobs);
-  const cloudFiles = rows.maps.files.map((f) => withoutDroppedFields("mapFile", f));
+  const cloudFiles = rows.maps.files.map((f) => knownFields("mapFile", f));
   const localFiles = (await tx.mapFile.findMany({ where: { eventId } })) as unknown as Row[];
   let mapFiles = 0;
   if (!sameMapFiles(localFiles, cloudFiles)) {
@@ -358,7 +361,7 @@ export async function applyMapRows(
   // change promotes an extra): an updated template whose name, key or
   // extra flag changes is first parked under its UUID as an extra, then
   // every update writes the cloud's values.
-  const cloudTemplates = applyTokens(rows.tables.mapTemplate ?? [], rows.versions.mapTemplate);
+  const cloudTemplates = applyTokens(rows.tables.mapTemplate ?? [], rows.versions.mapTemplate).map((r) => knownFields("mapTemplate", r));
   const templateIds = new Set(cloudTemplates.map((r) => String(r.id)));
   const localTemplates = await layoutDelegate(tx, "mapTemplate").findMany({ where: { eventId } });
   const localTemplateById = new Map(localTemplates.map((r) => [String(r.id), r]));
@@ -392,7 +395,7 @@ export async function applyMapRows(
   const placeable = (r: Row) =>
     (r.courseId == null || courseIds.has(String(r.courseId))) && (r.classId == null || classIds.has(String(r.classId)));
   const cloudSheets = applyTokens(rows.tables.courseMap ?? [], rows.versions.courseMap).map((r) => ({
-    ...r,
+    ...knownFields("courseMap", r),
     templateId: knownTemplateOf(templateIds, r.templateId),
   }));
   const sheetPlan = planMirror(await layoutDelegate(tx, "courseMap").findMany({ where: { eventId } }), cloudSheets);
@@ -407,7 +410,7 @@ export async function applyMapRows(
   );
 
   // (8) Course objects.
-  const cloudObjects = applyTokens(rows.tables.courseObject ?? [], rows.versions.courseObject);
+  const cloudObjects = applyTokens(rows.tables.courseObject ?? [], rows.versions.courseObject).map((r) => knownFields("courseObject", r));
   const objects = await mirrorLayoutTable(
     tx,
     eventId,
@@ -479,6 +482,13 @@ export async function refreshCloudOwnedMaps(
         )
       : { bytes: new Map<string, Buffer>(), fetchedBytes: 0 };
     const result = await db.$transaction((tx) => applyMapRows(tx, event.id, rows, blobs, graphicBlobs), { timeout: 60_000 });
+    // The map's rows were replaced: every computed climb rested on the previous ones. The holder clears and computes
+    // them (the cloud did not, during the lease; docs/course-elevation.md §6 "During a lease").
+    // The clear takes the lease check the compute takes, so the two are refused together (a takeover can land between).
+    if (result.mapFiles > 0 && (await mayRunBackgroundJob(db, event.id, "map-refresh"))) {
+      await clearComputedClimbs(db, event.id, "all", { emit: true });
+      await refreshComputedClimbs(db, event.id);
+    }
     return { ...result, fetchedBytes: blobs.fetchedBytes + graphicBlobs.fetchedBytes };
   });
 }
