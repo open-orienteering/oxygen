@@ -175,7 +175,8 @@ gcloud beta run domain-mappings create \
 ```bash
 scripts/gcp/deploy.sh           # GHCR :stable (or DEPLOY_TAG in env.sh)
 scripts/gcp/deploy.sh v1.2.3    # a GitHub Release
-scripts/gcp/deploy.sh edge      # latest verified main
+scripts/gcp/deploy.sh edge      # newest main commit that passed the image smoke
+scripts/gcp/deploy.sh --drop-unlisted v1.2.3   # also remove live variables deploy.sh does not set
 scripts/gcp/deploy.sh --from-source   # Cloud Build this working tree (fallback)
 ```
 
@@ -189,8 +190,34 @@ not that version's own tag, so `./deploy.sh v1.2.3` shows no `Image:` part
 `--from-source` computes the version locally with `scripts/build-version.mjs`
 (Cloud Build's upload has no `.git`) and passes it as `_BUILD_VERSION`.
 Idle vs event mode on the live service is **preserved** (a deploy during a
-competition will not flip you back to scale-to-zero). Use
+competition will not flip you back to scale-to-zero), and the closing message
+prints the mode the deploy used (min-instances, CPU throttling, or "first
+deploy"). The script looks the service up with `gcloud run services list`:
+a failing gcloud call stops the script with its error before anything is
+migrated or deployed, instead of being read as "no service" (which would
+deploy with `--min-instances=0` over an event-mode service). Use
 `./event-mode.sh` / `./idle-mode.sh` to change that on purpose.
+
+**Every deploy replaces the whole environment** (`--set-env-vars`,
+`--set-secrets`). The script therefore compares the live revision's
+variables with the ones it is about to set, and when any would disappear it
+names them and exits before migrating:
+
+```text
+!! The live service oxygen has variables this deploy would REMOVE: PRINT_WORKERS
+```
+
+Put your own variables in `EXTRA_ENV` in `env.sh`, `NAME=value` pairs
+separated by `;` (values may not contain `;`), for example
+`export EXTRA_ENV="PRINT_WORKERS=2;MAP_HEIGHTFIELD_MAX_CELLS=30000000"`
+(see the sizing notes). Malformed entries, and names the script manages
+itself (`AUTH_MODE`, `MAP_DEM_PROVIDERS`, `SYNC_SHARED_SECRET`, …), are
+refused. `--drop-unlisted` deploys anyway and removes what is not listed.
+The sync secret (below) and the Geotorget secret are bound automatically when
+they exist in Secret Manager. `edge` is the newest `main` commit whose image
+passed the smoke test (it can trail `main` while a newer commit is being
+built), and `vX.Y.Z` tags are promoted only from such images
+([releases/README.md](../releases/README.md#tags)).
 
 Cloud Run keeps the previous revision; roll back by deploying an older
 tag (`./deploy.sh v1.2.2` or `sha-…`) or with
@@ -240,6 +267,14 @@ A missing or wrong secret now fails the push loudly (`UNAUTHORIZED`, or
 shipper logs it every cycle; before, a secret-only push was rejected for lack
 of a user while the pull looked healthy. IAP still needs the ID token above.
 
+The secret lives in Secret Manager as `oxygen-sync-secret` (`SYNC_SECRET` in
+`env.sh` names another). `./provision.sh` creates it with a random value if
+it is missing and lets the runtime account read it; `./deploy.sh` then binds
+it as `SYNC_SHARED_SECRET` on every deploy, and warns (without failing) when
+it does not exist, because venue-box checkout would then fail with
+`PRECONDITION_FAILED`. Read the value for the box's `.env.venue` with
+`gcloud secrets versions access latest --secret=oxygen-sync-secret`.
+
 One-time setup:
 
 ```bash
@@ -262,15 +297,21 @@ gcloud iap settings get --resource-type=cloud-run \
   --service="$SERVICE" --region="$REGION" --project="$PROJECT_ID"
 ```
 
-On the venue box, copy `venue-sa.json` somewhere private and add to the
-API container's environment (alongside the existing sync vars):
+On the venue box, copy `venue-sa.json` somewhere private (outside the
+checkout; `chown 1000` and `chmod 400`, the container runs as uid 1000) and
+put these in `.env.venue`; `docker-compose.venue.yml` mounts the key read-only
+and sets `GOOGLE_APPLICATION_CREDENTIALS` itself:
 
 ```bash
-GOOGLE_APPLICATION_CREDENTIALS=/path/to/venue-sa.json
+VENUE_SA_KEY=/absolute/path/to/venue-sa.json   # absolute or ./ path
 SYNC_GOOGLE_AUDIENCE=<IAP OAuth client id>
 SYNC_PEER_URL=https://oxygen-….run.app
 SYNC_SHARED_SECRET=…
 ```
+
+The api logs at start whether IAP auth is on and warns when only one of the
+two is set or the key is unreadable. The full box setup is in
+[venue-runbook.md](venue-runbook.md#one-time-setup).
 
 With `SYNC_GOOGLE_AUDIENCE` unset, behavior is exactly as before (LAN /
 non-IAP deployments are unaffected).
@@ -401,8 +442,10 @@ deploy's default**, for an instance that prefers its secret store:
   environment (the tab can still switch them on). `DEM_SECRET` in
   `env.sh` names a different secret; `MAP_DEM_PROVIDERS` in `env.sh`
   overrides the providers (`glo30` alone for an instance outside Sweden,
-  which needs no secret); `MAP_DEM_LANTMATERIET_RESOLUTION_M=1` selects
-  the 1 m model.
+  which needs no secret). The 1 m model is chosen in Settings → Height data
+  (stored in the database, so a deploy does not reset it); the variable
+  `MAP_DEM_LANTMATERIET_RESOLUTION_M` is only the default before that, and
+  would have to go in `EXTRA_ENV` to survive a deploy.
 - The tab shows such an account as "From the deploy configuration" with
   its user name. A secret fixed in Secret Manager reaches the instance on
   the next deploy or restart, which queues the maps that failed on it.
@@ -427,7 +470,7 @@ run at once on an instance (Test connection waits in the same queue).
 (`course-print.md` §8.2): `PRINT_WORKERS` (default `1`, max `4`) is how
 many prints compose at once; each worker holds a decoded map document and
 fonts (a Club-full print run peaked at 2.6 GB RSS), so on 2 vCPU / 4 GiB
-keep it at 1, or 2 for small maps. Workers use no database connection.
+keep it at 1, or 2 for small maps (set it with `EXTRA_ENV="PRINT_WORKERS=2"` in `env.sh`; a value set only by hand is removed by the next deploy). Workers use no database connection.
 The rest of the 4 GiB is headroom for the map import worker (an OCAD
 file parsed into a map document); since v0.6.1 (E5) the upload itself
 parses nothing — it stores the chunks and starts the job.
@@ -439,7 +482,7 @@ the 60 M-cell graph budget, which caps it. Beside a 2.6 GB Club-full
 print that is about 3.7 GB, under the 4 GiB limit. The typed arrays live
 outside the V8 heap, so `--max-old-space-size` does not bound them.
 `MAP_HEIGHTFIELD_MAX_CELLS` (default 60 000 000, which refuses nothing)
-lowers the cap on a smaller instance; a map over it gets no height field
+lowers the cap on a smaller instance (via `EXTRA_ENV` in `env.sh`); a map over it gets no height field
 (`over-cap`) and no 3D.
 - **The render gate.** Each print also takes a permit of the process's
 render gate (`renderGate()` in `packages/api/src/map-render-limits.ts`,

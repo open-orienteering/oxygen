@@ -16,7 +16,10 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # One group per commit on push: a burst of merges to main must not cancel
+  # the previous merge's run (publish included), or that commit never gets an
+  # image. Pull requests still cancel their own superseded runs.
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
 
 permissions:
@@ -210,6 +213,23 @@ jobs:
           cache-to: type=gha,scope=image-smoke,mode=max
       - name: Native modules render in the image
         run: docker run --rm -w /app/packages/api oxygen-smoke:ci node scripts/image-smoke.mjs
+      - name: Image runs unprivileged
+        run: test "$(docker run --rm --entrypoint id oxygen-smoke:ci -u)" != 0
+      - name: Image boots against Postgres (migrate, /ready, showcase)
+        env:
+          OXYGEN_IMAGE: oxygen-smoke:ci
+          OXYGEN_PULL_POLICY: never
+          OXYGEN_PORT: "18080"
+          COMPOSE_PROJECT_NAME: oxygen-pr-smoke
+        run: bash scripts/demo.sh
+      - name: Clean up smoke-test stack
+        if: always()
+        env:
+          OXYGEN_IMAGE: oxygen-smoke:ci
+          OXYGEN_PULL_POLICY: never
+          OXYGEN_PORT: "18080"
+          COMPOSE_PROJECT_NAME: oxygen-pr-smoke
+        run: docker compose -f docker-compose.release.yml down -v
       - name: Image runs the pinned Node major
         run: |
           want="v$(cat .nvmrc)."

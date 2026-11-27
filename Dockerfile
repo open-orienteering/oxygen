@@ -107,6 +107,14 @@ ENV PORT=3001
 ENV HOST=0.0.0.0
 EXPOSE 3001
 
+# Run unprivileged (uid 1000, the base image's `node` user): the API parses
+# untrusted uploads and spawns pg_dump/psql. Nothing writes under /app (the
+# only scratch files go to os.tmpdir()); the tree stays root-owned and
+# read-only to this user. A key file bind-mounted into the venue container
+# must be readable by uid 1000 (docs/ops/venue-runbook.md). Deliberately no
+# HEALTHCHECK here: compose files define their own, Cloud Run ignores it.
+USER node
+
 CMD ["node", "packages/api/dist/index.js"]
 
 # ─── Stage 5: Web production image (nginx) ─────────────────

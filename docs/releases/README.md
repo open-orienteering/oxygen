@@ -12,15 +12,16 @@ on port 8080 (`WEB_DIST_DIR=/app/web-dist`).
 
 | Tag | When it moves | Meaning |
 | --- | ------------- | ------- |
-| `sha-<40-char-commit>` | Never | Immutable build of that `main` commit |
-| `edge` | Every successful `main` CI + publish | Latest verified main |
+| `sha-<40-char-commit>` | Never | Immutable build of that `main` commit; pushed before its smoke test, so it can exist for a commit whose smoke failed |
+| `verified-sha-<40-char-commit>` | Never | The same image, tagged only after the publish run's smoke test (`scripts/demo.sh`: migrate, boot, `/ready`, showcase) passed. `release.yml` promotes only this |
+| `edge` | After the smoke, if the commit is still the code tip of `main` | The newest `main` commit that passed the image smoke. Not moved when a later code commit has landed (`scripts/edge-guard.mjs`), so a burst of merges leaves it on the newest verified one |
 | `vX.Y.Z` / `X.Y.Z` | Never | GitHub Release of that version |
 | `stable` / `latest` | When a `vX.Y.Z` tag is pushed | Current release |
 
 Ordinary pushes to `main` do **not** move `latest`.
 
 Until the first GitHub Release exists, `stable` / `latest` are absent — use
-`edge` or a `sha-…` tag.
+`edge` or a `sha-…` tag. Prefer a pinned `vX.Y.Z` for anything that matters.
 
 ### The version
 
@@ -103,13 +104,20 @@ Public images need no pull secret on Cloud Run, Fargate, or Compose.
 ## GitHub Actions
 
 - [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) — lint, build, unit,
-  integration, and E2E on pull requests and `main`.
+  integration, and E2E on pull requests and `main`. Its `image` job builds the
+  production image on every PR and boots it through `scripts/demo.sh` (migrate,
+  start, `/ready`, showcase) on its own Compose project and port, and checks it
+  does not run as root. On `main` each push has its own concurrency group, so
+  a burst of merges does not cancel the previous commit's publish.
 - [`.github/workflows/publish.yml`](../../.github/workflows/publish.yml) — after
-  `main` CI succeeds, Buildx pushes `sha-<commit>` and `edge`. No GCP credentials.
+  `main` CI succeeds, Buildx pushes `sha-<commit>` only, the smoke test boots
+  it, and then `verified-sha-<commit>` is written and `edge` moved (if the commit
+  is still the code tip of `main`). No GCP credentials.
 - [`.github/workflows/release.yml`](../../.github/workflows/release.yml) — a git tag
   `vX.Y.Z` **retags** the existing SHA image (no rebuild) and opens a GitHub
   Release. It fails when the tag differs from the tagged commit's
-  `package.json` versions, or when that commit was never published from `main`.
+  `package.json` versions, or when that commit has no `verified-sha-…` image
+  (never published, or its smoke did not pass).
 
 ## Cut a release
 
@@ -122,8 +130,8 @@ Public images need no pull secret on Cloud Run, Fargate, or Compose.
    It changes only the `"version"` line of the four `package.json` files.
    Commit that with the release runbook (`docs/releases/<name>.md`, listed in the table below).
 
-2. Merge it. `main` CI publishes `sha-<commit>` and `edge` from the merge
-   commit; that image reports `1.2.3` (its `package.json` is ahead of the
+2. Merge it. `main` CI publishes `sha-<commit>`, then `verified-sha-<commit>` and
+   (while it is the tip) `edge` from the merge commit; that image reports `1.2.3` (its `package.json` is ahead of the
    last tag). A merge to `main` without the bump reports the last release
    past its tag (`1.2.2-5-gabc1234`), and `release.yml` refuses `v1.2.3` on it.
 
@@ -150,15 +158,23 @@ it sets (`pnpm release:version`) and the tag it deploys.
 ## Self-host with Compose
 
 ```bash
-docker compose -f docker-compose.release.yml up -d
-# pin a version:
+# pin a version (recommended; replace v1.2.3 with the release you want):
 OXYGEN_IMAGE=ghcr.io/open-orienteering/oxygen:v1.2.3 \
   docker compose -f docker-compose.release.yml up -d
+# without OXYGEN_IMAGE the floating `stable` tag is used
 ```
 
 The app is at http://localhost:8080. Compose applies Prisma migrations
-before the app starts. Update by changing `OXYGEN_IMAGE` (or using `stable`)
-and running `up -d` again — the migrate service re-runs.
+before the app starts. An image already on the machine is reused
+(`OXYGEN_PULL_POLICY` defaults to `missing`), so `up -d` works offline and
+never changes the version by itself. To upgrade: change `OXYGEN_IMAGE` (or
+stay on `stable`), `docker compose -f docker-compose.release.yml pull`, take
+a pre-upgrade dump (`docker compose -f docker-compose.release.yml run --rm
+--entrypoint pg_dump backup --schema=oxygen --format=custom
+--file=/backups/pre-upgrade_$(date -u +%Y%m%d_%H%M%S).dump`, see
+[backup-restore.md](../ops/backup-restore.md#before-an-upgrade)), then
+`up -d` — the migrate service re-runs. `OXYGEN_PULL_POLICY=always` restores
+pull-on-every-`up`.
 
 Source-building files (`docker-compose.yml`, `docker-compose.host-db.yml`,
 `docker-compose.venue.yml`) stay development / venue workflows.

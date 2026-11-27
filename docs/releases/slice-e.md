@@ -210,7 +210,9 @@ cd scripts/gcp
   describe oxygen --format='value(spec.template.spec.containers[0].env)'`):
   `deploy.sh` passes `--set-env-vars`, which replaces the revision's
   environment, so the retired tile `MAP_*` variables are only there if
-  someone added them after a deploy.
+  someone added them after a deploy. (Since the deploy-and-venue-setup fix,
+  `deploy.sh` also refuses to deploy while the live service has a variable
+  it would remove, unless `--drop-unlisted`; see `docs/ops/deploy-gcp-cloud-run.md`.)
 
 Then take an on-demand backup — the only rollback after the migration:
 
@@ -291,8 +293,10 @@ are gone, all 14 live events keep their document, the database is 325 MB.
 - Remove any hand-set tile env vars found in §2.1 (`MAP_TILE_BLOCK_TILES`,
   `MAP_TILE_SUPERSAMPLE`, `MAP_TILE_PRECACHE`, `MAP_PRECACHE_*`,
   `MAP_RENDER_MAX_QUEUE`, `MAP_SVG_CACHE_EVENTS`, `MAP_WINDOW_MAX_PIXELS`):
-  `gcloud run services update oxygen --remove-env-vars=<list>`. Keep
-  `MAP_RENDER_CONCURRENCY` and `PRINT_WORKERS`.
+  `gcloud run services update oxygen --remove-env-vars=<list>`, or deploy
+  with `--drop-unlisted`. `deploy.sh` sets `MAP_RENDER_CONCURRENCY` itself;
+  keep `PRINT_WORKERS` in `EXTRA_ENV` in `env.sh`, because the next deploy
+  would otherwise remove it.
 - `jobs/map-survey.js` is a pre-v0.6.1 tool: its queries of the dropped
   tables now print `ERR` lines.
 - A per-event dump taken before v0.6.1 restores with

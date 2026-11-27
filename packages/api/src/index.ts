@@ -2,6 +2,7 @@
 // models surface BigInt PKs throughout the response pipeline.
 import "./bigint-json.js";
 
+import { accessSync, constants } from "node:fs";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import {
@@ -30,6 +31,9 @@ import { installDemConfigSource } from "./map-store/dem-settings-store.js";
 import { startDemJobEngine } from "./map-store/dem-jobs.js";
 import { registerCourseMapRoutes } from "./course-maps/routes.js";
 import { registerStaticServe } from "./staticServe.js";
+import { registerReadyRoute } from "./ready.js";
+import { describeSyncAuth } from "./sync/googleIdToken.js";
+import { nodeRole } from "./sync/nodeIdentity.js";
 import "dotenv/config";
 
 const PORT = parseInt(process.env.PORT ?? "3002", 10);
@@ -101,6 +105,8 @@ async function main() {
   // past it. Null on a local build; the web then shows its own baked value.
   const VERSION = process.env.OXYGEN_VERSION || null;
   server.get("/health", async () => ({ status: "ok", startedAt: SERVER_START }));
+  // Readiness (database + migrations); /health stays the cheap liveness probe.
+  registerReadyRoute(server, { db: () => prisma() });
   server.get("/api/version", async (_req, reply) =>
     reply
       .header("Cache-Control", "no-store")
@@ -172,6 +178,18 @@ async function main() {
     .catch((err) => console.error("[background] startup failed:", err));
 
   await server.listen({ port: PORT, host: HOST });
+
+  if (nodeRole() === "venue") {
+    const auth = describeSyncAuth(process.env, (p) => {
+      try {
+        accessSync(p, constants.R_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    server.log[auth.level](auth.message);
+  }
 
   const shutdown = async () => {
     server.log.info("Shutting down");

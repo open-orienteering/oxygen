@@ -6,7 +6,7 @@
 # failure. See docs/ops/deploy-gcp-cloud-run.md.
 set -euo pipefail
 cd "$(dirname "$0")"
-source ./env.sh
+source "${OXYGEN_GCP_ENV:-./env.sh}"
 
 gcloud config set project "$PROJECT_ID"
 
@@ -67,6 +67,26 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:${RUNTIME_SA}" --role="roles/cloudsql.client" --condition=None >/dev/null
 gcloud secrets add-iam-policy-binding oxygen-database-url \
   --member="serviceAccount:${RUNTIME_SA}" --role="roles/secretmanager.secretAccessor" >/dev/null
+
+# Venue-box sync (docs/ops/deploy-gcp-cloud-run.md "Venue-box sync through IAP"):
+# the shared secret both nodes must hold (SYNC_SHARED_SECRET). Created once with
+# a random value, never overwritten; deploy.sh binds it to the service when it exists.
+SYNC_SECRET="${SYNC_SECRET:-oxygen-sync-secret}"
+# A failing list is an error, not "absent": a blind create would then add a
+# second version and change a secret the venue boxes already use.
+sync_listing="$(gcloud secrets list --filter="name~/secrets/${SYNC_SECRET}$" --format='value(name)')" || {
+  echo "!! gcloud secrets list failed; the sync secret was not touched." >&2
+  exit 1
+}
+if [[ -z "$sync_listing" ]]; then
+  openssl rand -hex 32 | tr -d '\n' | gcloud secrets create "$SYNC_SECRET" --data-file=- >/dev/null
+  echo "── Created secret ${SYNC_SECRET} (random value)."
+fi
+gcloud secrets add-iam-policy-binding "$SYNC_SECRET" \
+  --member="serviceAccount:${RUNTIME_SA}" --role="roles/secretmanager.secretAccessor" >/dev/null
+echo "── ${SYNC_SECRET}: the runtime account may read it. Re-run ./deploy.sh to bind it."
+echo "   Venue boxes need the same value as SYNC_SHARED_SECRET in .env.venue:"
+echo "     gcloud secrets versions access latest --secret=${SYNC_SECRET}"
 
 # Height data (docs/ops/deploy-gcp-cloud-run.md "Height data"): the Geotorget secret is
 # created by the operator with their own credential, never by this script; once it

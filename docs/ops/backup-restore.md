@@ -130,11 +130,34 @@ C="docker compose -f docker-compose.venue.yml --env-file .env.venue"
 $C stop api
 $C exec -T postgres sh -c 'dropdb -U oxygen --if-exists oxygen && createdb -U oxygen oxygen'
 $C exec -T postgres pg_restore -U oxygen -d oxygen --no-owner < backups/oxygen_20260501_120000.dump
+$C run --rm migrate
 $C start api
-$C exec api pnpm --filter @oxygen/api exec prisma migrate deploy
 ```
 
 To get one event out of a whole-database dump, restore it into a scratch database, download the event's backup from an Oxygen pointed at it (or run the dump there), and `pnpm event:restore` that file into the live database.
+
+## Before an upgrade
+
+The rotating dumps are the safety net for a crash, not for an upgrade: a bad
+migration or an image that cannot run it leaves the newest dump taken from
+a database the new code may already have touched, and the rotation deletes
+the oldest dumps. Before every upgrade of a box (venue or release compose),
+pull the new image first, then take a dump the rotation will not delete
+(`pre-upgrade_*` does not match `oxygen_*.dump`), then start the new version:
+
+```bash
+C="docker compose -f docker-compose.release.yml"   # or -f docker-compose.venue.yml --env-file .env.venue
+$C pull                       # release compose; the venue box rebuilds with `up --build`
+$C run --rm --entrypoint pg_dump backup --schema=oxygen --format=custom \
+  --file=/backups/pre-upgrade_$(date -u +%Y%m%d_%H%M%S).dump
+$C up -d                      # migrate runs first, then the app
+```
+
+The dump lands in `BACKUP_DIR` (default `./backups`) and has the same format
+as the automatic ones. To go back, restore it as described above with the
+previous image. `docker-compose.release.yml` no longer pulls on `up` by
+itself (`OXYGEN_PULL_POLICY` defaults to `missing`), so a version change is
+always a deliberate `pull`.
 
 ## Security and access control
 
