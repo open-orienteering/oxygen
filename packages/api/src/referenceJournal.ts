@@ -135,8 +135,8 @@ export async function courseUpsertPayload(
   return {
     id: row.id,
     seq: row.seq,
-    // Derived fields (lengthSource E6, climbSource and winnerPaceSPerKm
-    // docs/course-elevation.md §6/§7.8) travel with the snapshot, not the journal.
+    // Derived: `lengthSource` (E6) travels with the snapshot, not the journal. `climbSource` and `winnerPaceSPerKm`
+    // do travel here (docs/course-elevation.md §6 "Readers", §7.8).
     fields: portableFields(row as unknown as Record<string, unknown>, COURSE_DERIVED_FIELDS),
     courseControls: ccs,
   };

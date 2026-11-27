@@ -64,6 +64,13 @@ export function resetClimbFields(): void {
   fields.clear();
 }
 
+/** What a sampler rests on: the pinned document and the confirmed interval. Cheap; read again inside a course's transaction. */
+export async function climbInputsStamp(db: Db, eventId: bigint): Promise<string> {
+  const pin = await eventPin(db, eventId);
+  if (!pin?.documentHash) return "none";
+  return `${pin.documentHash}|${(await eventContourInterval(db, pin)).confirmedM ?? "-"}`;
+}
+
 /** The event's climb field as a sampler, from stored bytes only; null without a pin, a pick or stored bytes. */
 export async function climbSamplerFor(db: Db, eventId: bigint): Promise<TerrainSampler | null> {
   const pin = await eventPin(db, eventId);
@@ -109,6 +116,8 @@ export async function computeMissingClimbs(db: PrismaClient, eventId: bigint, co
     orderBy: { id: "asc" },
   });
   if (open.length === 0) return 0;
+  // Taken before the sampler is built: an interval or a map that changes meanwhile shows in the stamp.
+  const inputs = await climbInputsStamp(db, eventId);
   const sampler = await climbSamplerFor(db, eventId);
   if (!sampler) return 0;
   let written = 0;
@@ -120,6 +129,9 @@ export async function computeMissingClimbs(db: PrismaClient, eventId: bigint, co
     written += await db.$transaction(async (tx) => {
       // A checkout can start between two courses.
       if (!(await mayRunBackgroundJob(tx, eventId, "course-climb"))) return 0;
+      // The map or its interval changed since the sampler was built: nothing is stored at the old one
+      // (the change's own clear and compute follow).
+      if ((await climbInputsStamp(tx, eventId)) !== inputs) return 0;
       // Locked: an edit of this course waits, then clears what is written here and computes again.
       const locked = await tx.$queryRaw<{ id: string }[]>`
         SELECT "id" FROM "oxygen"."courses"

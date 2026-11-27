@@ -12,6 +12,7 @@ import type { PrismaClient } from "../generated/prisma/client.js";
 import { mayRunBackgroundJob } from "../background-lease.js";
 import { canRemoveClubMap } from "../club-map-library.js";
 import { clearComputedClimbs } from "../course-geometry.js";
+import { outsideClimbMarks } from "../course-climb-pending.js";
 import { refreshComputedClimbs } from "../course-climb.js";
 
 /** The events whose map is a version of the club map, not removed ones (their climbs are nobody's to compute). */
@@ -21,7 +22,12 @@ export async function eventsOnClubMap(db: PrismaClient, clubMapId: string): Prom
 }
 
 /** Clears and computes again the computed climbs of one event, when this node may. */
+let runs = 0;
+/** For tests: how many runs have started. */
+export const _contourIntervalRuns = (): number => runs;
+
 async function applyToEvent(db: PrismaClient, eventId: bigint): Promise<boolean> {
+  runs++;
   if (!(await mayRunBackgroundJob(db, eventId, "contour-interval"))) return false;
   await clearComputedClimbs(db, eventId, "all", { emit: true });
   await refreshComputedClimbs(db, eventId);
@@ -40,7 +46,8 @@ export function enqueueContourInterval(db: PrismaClient, eventIds: readonly bigi
     const state = running.get(eventId);
     if (state) { state.again = true; continue; }
     const entry = { again: false, done: Promise.resolve() };
-    entry.done = (async () => {
+    // Started outside the request's climb-marks scope: the run outlives the request.
+    entry.done = outsideClimbMarks(async () => {
       do {
         entry.again = false;
         try {
@@ -50,7 +57,7 @@ export function enqueueContourInterval(db: PrismaClient, eventIds: readonly bigi
         }
       } while (entry.again);
       running.delete(eventId);
-    })();
+    });
     running.set(eventId, entry);
   }
 }

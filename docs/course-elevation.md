@@ -237,7 +237,10 @@ recommended defaults):
     otherwise), both through `clubMap.setContourInterval` and through
     `course.setContourInterval` on an event whose map comes from the
     library; an event's own map is confirmed by anyone who may edit its
-    courses. The recompute of the climbs runs in the background, one run at
+    courses. `course.mapMetadata.contourInterval` and `clubMap.list` return
+    `mayChange`; the editor and the card hide the banner, Confirm, Save
+    and Mark as not confirmed when it is false (the "follows the club map"
+    note stays). The recompute of the climbs runs in the background, one run at
     a time per event (`enqueueContourInterval`, as the route refresh), on
     the events that are not removed: the mutation returns once the value is
     stored. The banner shows on a desktop in course mode only and is
@@ -653,9 +656,11 @@ these; an older API image or a peer that knows no source writes them,
 AGENTS §7). `manual` and `file` win alike; they are kept apart as
 `length_source` keeps `file`. A row with `climb_m` 0 has **no climb**
 whatever its source says, and the compute fills it. A `course.upserted`
-applied from the journal carries no source, so the apply sets the
-source to NULL with the climb it writes: an incoming climb is a typed
-one here, an incoming 0 is none.
+applied from the journal carries the source (since review package 23),
+and the apply writes it with the climb: a computed climb stays computed
+here, an incoming 0 is none. Only an entry that carries `climbM` without
+`climbSource` (an older sender) sets the source to NULL: an incoming climb
+is then a typed one.
 
 **The way back.** Clearing the Courses page's climb field (or typing 0)
 writes `climb_m` 0 with source NULL, and the computed climb is stored in

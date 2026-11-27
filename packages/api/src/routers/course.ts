@@ -57,7 +57,7 @@ import {
   type MapCalibrationPoint,
 } from "../event-map.js";
 import { copyClubColourSettings } from "../map-store/colour-settings.js";
-import { latestVersionOrRefuse } from "../club-map-library.js";
+import { canRemoveClubMap, latestVersionOrRefuse } from "../club-map-library.js";
 import { cutRotationDeg, meridianStalenessFromDetection } from "../map-north.js";
 import { documentNorth, eventPin } from "../map-store/event-document.js";
 import { eventPatchVersion } from "../map-store/patches.js";
@@ -1390,6 +1390,9 @@ export const courseRouter = router({
       ? await documentNorth(ctx.db, row.documentHash)
       : null;
     const interval = await eventContourInterval(ctx.db, row);
+    // A club map's value is its uploader's or an admin's to change; an event's own is any course editor's (§0.43).
+    const clubSeries = interval.clubMapId ? await ctx.db.clubMap.findUnique({ where: { id: interval.clubMapId }, select: { createdBy: true } }) : null;
+    const mayChangeInterval = interval.from === "event" || canRemoveClubMap({ authEnabled: ctx.authEnabled, user: ctx.user, createdBy: clubSeries?.createdBy ?? null });
     const terrain = row.documentHash ? await terrainDescriptor(ctx.db, row.documentHash, undefined, { rotationCorrection, confirmedIntervalM: interval.confirmedM }) : null;
 
     return {
@@ -1409,7 +1412,7 @@ export const courseRouter = router({
       /** The pinned document's height field (docs/map-storage.md §4.7): state, `url` to fetch (fetching a `pending` one derives it), `decided` for the 3D gate, and `dem` (the DEM's fields, none for a rotation-corrected pin); null until the pin. */
       terrain,
       /** The map's contour interval (docs/course-elevation.md §0.43): the assumed one, the confirmed one, whose it is, and whether the DEM anchor suspects the contours are drawn at half. */
-      contourInterval: terrain ? { assumedM: terrain.interval.assumedM, confirmedM: interval.confirmedM, from: interval.from, suspect: terrain.dem.anchored?.intervalSuspect === true } : null,
+      contourInterval: terrain ? { assumedM: terrain.interval.assumedM, confirmedM: interval.confirmedM, from: interval.from, mayChange: mayChangeInterval, suspect: terrain.dem.anchored?.intervalSuspect === true } : null,
       cutRotationDeg: cutRotationDeg(
         northOffset,
         north?.meridian?.medianTiltDeg ?? null,

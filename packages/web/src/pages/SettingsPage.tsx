@@ -378,7 +378,7 @@ export function SettingsPage() {
                         )}
                       </div>
                     )}
-                    {row.version && <ClubMapInterval id={row.id} confirmedM={row.contourIntervalM} assumedM={row.assumedContourIntervalM} />}
+                    {row.version && <ClubMapInterval id={row.id} confirmedM={row.contourIntervalM} assumedM={row.assumedContourIntervalM} mayChange={row.mayChange} />}
                     {row.version == null && (
                       <ClubMapImportState
                         job={row.importJob}

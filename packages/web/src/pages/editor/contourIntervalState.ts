@@ -23,13 +23,15 @@ export { parseContourInterval as parseInterval } from "@oxygen/shared/src/terrai
 
 export function useContourInterval() {
   const utils = trpc.useUtils();
-  const canEdit = useCapabilities().has("courses.edit");
+  // A club map's value is its uploader's or an admin's to change (the server says so in `mayChange`).
+  const canEditCourses = useCapabilities().has("courses.edit");
   const meta = trpc.course.mapMetadata.useQuery(undefined, { staleTime: Number.POSITIVE_INFINITY });
   const mutation = trpc.course.setContourInterval.useMutation({
     // The stored climbs were cleared and computed again on the server: everything that shows them is read again.
     onSuccess: async () => { await Promise.all([utils.course.mapMetadata.invalidate(), utils.course.list.invalidate(), utils.course.detail.invalidate()]); },
   });
   const data = meta.data?.contourInterval ?? null;
+  const canEdit = canEditCourses && data?.mayChange !== false;
   const hasContours = meta.data?.terrain ? meta.data.terrain.state === "ready" || meta.data.terrain.state === "pending" : false;
   return {
     data, canEdit, hasContours,

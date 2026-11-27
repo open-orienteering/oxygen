@@ -317,6 +317,8 @@ export async function refreshAutoRoutes(db: PrismaClient, eventId: bigint, opts:
         results = await search({ ...init, jobs: chunk.map(({ from, to, via, obstacles }) => ({ from, to, ...(via ? { via } : {}), obstacles })) });
       } catch (err) {
         failure ??= err;
+        // The worker could not prepare the document: the next chunk would start another one and fail the same way.
+        if (!opts.search) break;
         continue;
       }
       // A checkout can start while a chunk is searched: its rows are not written.

@@ -21,14 +21,14 @@ import { deriveDocumentHeightfield, readHeightfield } from "../../map-store/heig
 import { computeMissingClimbs, refreshComputedClimbs, refreshMarkedClimbs, resetClimbFields } from "../../course-climb.js";
 import { acquireLease, releaseLease } from "../../sync/lease.js";
 import { withClimbMarks } from "../../course-climb-pending.js";
-import { awaitContourIntervalJobs } from "../../map-store/contour-interval-apply.js";
+import { _contourIntervalRuns, awaitContourIntervalJobs, enqueueContourInterval, eventsOnClubMap } from "../../map-store/contour-interval-apply.js";
 import { rebuildCourseLengths } from "../../course-geometry.js";
 
 // The reads of the event's chosen routes, and a hook that runs after a course's climb has been journaled.
-const spy = vi.hoisted(() => ({ routeReads: 0, afterEmit: null as null | (() => Promise<void>) }));
+const spy = vi.hoisted(() => ({ routeReads: 0, afterEmit: null as null | (() => Promise<void>), beforeRoutes: null as null | (() => Promise<void>) }));
 vi.mock("../../leg-routes.js", async (importOriginal) => {
   const real = await importOriginal<typeof import("../../leg-routes.js")>();
-  return { ...real, chosenLegRoutes: (...args: Parameters<typeof real.chosenLegRoutes>) => { spy.routeReads++; return real.chosenLegRoutes(...args); } };
+  return { ...real, chosenLegRoutes: async (...args: Parameters<typeof real.chosenLegRoutes>) => { spy.routeReads++; const hook = spy.beforeRoutes; spy.beforeRoutes = null; await hook?.(); return real.chosenLegRoutes(...args); } };
 });
 vi.mock("../../referenceJournal.js", async (importOriginal) => {
   const real = await importOriginal<typeof import("../../referenceJournal.js")>();
@@ -425,7 +425,7 @@ describe("the contour interval gates the stored climb (docs/course-elevation.md 
     await c.course.refreshClimbs();
     expect(await climb(course1)).toEqual({ m: 0, source: null });
     const meta = await c.course.mapMetadata();
-    expect(meta!.contourInterval).toEqual({ assumedM: 5, confirmedM: null, from: "event", suspect: false });
+    expect(meta!.contourInterval).toEqual({ assumedM: 5, confirmedM: null, from: "event", mayChange: true, suspect: false });
     expect(meta!.terrain!.interval).toEqual({ assumedM: 5, confirmedM: null });
   });
 
@@ -441,14 +441,12 @@ describe("the contour interval gates the stored climb (docs/course-elevation.md 
     expect((await c.course.mapMetadata())!.contourInterval).toMatchObject({ confirmedM: 5, from: "event" });
 
     await c.course.setContourInterval({ intervalM: 2.5 });
-
     await awaitContourIntervalJobs();
     const at25 = await climb(course1);
     expect(at25.source).toBe("computed");
     expect(Math.abs(at25.m - at5.m / 2)).toBeLessThanOrEqual(1.5);
 
     await c.course.setContourInterval({ intervalM: null });
-
     await awaitContourIntervalJobs();
     expect(await climb(course1)).toEqual({ m: 0, source: null });
     // A typed climb is untouched by any change of the interval.
@@ -458,6 +456,37 @@ describe("the contour interval gates the stored climb (docs/course-elevation.md 
     expect(await climb(course1)).toEqual({ m: 77, source: "manual" });
     await c.course.update({ id: course1, climb: null });
     expect((await climb(course1)).source).toBe("computed");
+  });
+
+  it("an interval that changes while the compute runs: nothing is stored at the old one", async () => {
+    await c.course.setContourInterval({ intervalM: 5 });
+    await awaitContourIntervalJobs();
+    await c.course.update({ id: course1, climb: 77 });
+    await c.course.update({ id: course1, climb: null });
+    const row = await rowOf(t, course1);
+    await t.db.course.update({ where: { id: row.id }, data: { climbM: 0, climbSource: null } });
+    // The sampler is built at 5 m; the interval changes before the course's transaction.
+    spy.beforeRoutes = async () => { await t.db.mapFile.updateMany({ where: { eventId: t.eventId }, data: { contourIntervalM: 2.5 } }); };
+    expect(await computeMissingClimbs(t.db, t.eventId)).toBe(0);
+    expect(await climb(course1)).toEqual({ m: 0, source: null });
+    // The next compute runs at the new one.
+    expect(await computeMissingClimbs(t.db, t.eventId)).toBe(1);
+    await c.course.setContourInterval({ intervalM: 5 });
+    await awaitContourIntervalJobs();
+  });
+
+  it("requests that arrive while a run is going coalesce into one more run; a club map's events leave out the removed ones", async () => {
+    await c.course.setContourInterval({ intervalM: 5 });
+    await awaitContourIntervalJobs();
+    const before = _contourIntervalRuns();
+    enqueueContourInterval(t.db, [t.eventId]);
+    enqueueContourInterval(t.db, [t.eventId]);
+    enqueueContourInterval(t.db, [t.eventId]);
+    await awaitContourIntervalJobs();
+    expect(_contourIntervalRuns() - before).toBe(2);
+    expect((await climb(course1)).source).toBe("computed");
+    // No club map, no events.
+    expect(await eventsOnClubMap(t.db, "00000000-0000-7000-8000-000000000000")).toEqual([]);
   });
 
   it("refuses a value outside what a map's interval can be", async () => {
@@ -519,6 +548,31 @@ describe("the contour interval gates the stored climb (docs/course-elevation.md 
     } finally {
       await other.cleanup();
     }
+  });
+
+  it("deleting a club map or its version leaves the events its confirmed interval on their own rows", async () => {
+    await c.course.setContourInterval({ intervalM: null });
+    await awaitContourIntervalJobs();
+    const own = async () => (await t.db.mapFile.findFirstOrThrow({ where: { eventId: t.eventId } })).contourIntervalM;
+    for (const how of ["series", "version"] as const) {
+      const series = await t.db.clubMap.create({ data: { name: `Interval remove ${how} ${suffix}`, contourIntervalM: 2.5 } });
+      const v = await t.db.clubMapVersion.create({ data: { clubMapId: series.id, seq: 1, sourceHash: doc.sourceHash, documentHash: doc.hash } });
+      await t.db.mapFile.updateMany({ where: { eventId: t.eventId }, data: { clubMapVersionId: v.id, contourIntervalM: null } });
+      expect((await c.course.mapMetadata())!.contourInterval).toMatchObject({ confirmedM: 2.5, from: "club" });
+      if (how === "series") await makeCaller(null).clubMap.remove({ id: series.id });
+      else {
+        // Only a promoted latest version can be removed on its own: give it a layer.
+        const v2 = await t.db.clubMapVersion.create({ data: { clubMapId: series.id, seq: 2, sourceHash: doc.sourceHash, documentHash: doc.hash, patch: [{ unitsPerMm: 100, symbols: [], ops: { "hide:1": { op: "hide", sourceIndex: 1 } } }] as never } });
+        await t.db.mapFile.updateMany({ where: { eventId: t.eventId }, data: { clubMapVersionId: v2.id } });
+        await makeCaller(null).clubMap.removeVersion({ id: series.id, versionId: v2.id });
+      }
+      expect(await own()).toBe(2.5);
+      expect((await c.course.mapMetadata())!.contourInterval).toMatchObject({ confirmedM: 2.5, from: "event" });
+      await t.db.mapFile.updateMany({ where: { eventId: t.eventId }, data: { clubMapVersionId: null, contourIntervalM: null } });
+      await t.db.clubMap.deleteMany({ where: { id: series.id } });
+    }
+    await c.course.setContourInterval({ intervalM: 5 });
+    await awaitContourIntervalJobs();
   });
 
   it("under a foreign lease the value is written and no course row is touched; the holder's map refresh does the rest", async () => {

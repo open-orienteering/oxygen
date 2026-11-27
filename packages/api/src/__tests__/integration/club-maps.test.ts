@@ -451,6 +451,9 @@ describe("club map library", () => {
     await expect(as(manager, true).course.setContourInterval({ intervalM: 2.5 })).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringContaining("uploader") });
     expect((await ctx.db.clubMap.findUniqueOrThrow({ where: { id: library.id } })).contourIntervalM).toBeNull();
 
+    // The list says who may, so the UI can hide the controls.
+    expect((await as(manager, false).clubMap.list()).find((m) => m.id === library.id)!.mayChange).toBe(false);
+    expect((await as(admin, false).clubMap.list()).find((m) => m.id === library.id)!.mayChange).toBe(true);
     // An admin may, both ways.
     await as(admin, false).clubMap.setContourInterval({ id: library.id, intervalM: 2.5 });
     expect((await ctx.db.clubMap.findUniqueOrThrow({ where: { id: library.id } })).contourIntervalM).toBe(2.5);

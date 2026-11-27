@@ -39,3 +39,8 @@ export async function withClimbMarks<T>(fn: () => Promise<T>): Promise<{ result:
   const result = await scope.run(marks, fn);
   return { result, marks };
 }
+
+/** Runs `fn` outside the request's marks scope: a background job that outlives the request must not add to its marks. */
+export function outsideClimbMarks<T>(fn: () => T): T {
+  return scope.exit(fn);
+}
