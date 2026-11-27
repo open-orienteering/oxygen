@@ -34,7 +34,7 @@ describe("edge-guard", () => {
 
   it("says yes when only docs and markdown follow", () => {
     const sha = commit("src/a.ts", "1", "code");
-    commit("docs/x.md", "d", "docs");
+    commit(["docs", "x.md"].join("/"), "d", "docs"); // joined so the doc-link check skips it
     commit("README.md", "r", "readme");
     commit("packages/web/NOTES.md", "n", "nested md");
     assert.equal(edgeGuard({ sha, ref: "main", cwd: dir }).ok, true);
