@@ -313,7 +313,15 @@ export function drain(
   store: ControlWriteStore,
   writes: DrainWrites,
   competitionId: string,
-  opts: { /** Called with each entry the server took, as sent. */ onSent?: (e: ControlWrite) => void } = {},
+  opts: {
+    /** Called with each entry the server took, as sent. */
+    onSent?: (e: ControlWrite) => void;
+    /**
+     * Asked before each entry is picked (MC-17, CRS-015): false — the editor left the event or was closed — stops the
+     * drain (`stopped`), the entries not sent staying `pending` for the next drain of their own event.
+     */
+    active?: () => boolean;
+  } = {},
 ): Promise<DrainResult | null> {
   return exclusive(competitionId, async () => {
     const result: DrainResult = { sent: 0, conflicts: 0, failed: 0, stopped: false };
@@ -324,6 +332,7 @@ export function drain(
       for (const e of await tx.list(competitionId)) if (e.sending) await tx.put({ ...e, sending: false });
     });
     for (;;) {
+      if (opts.active && !opts.active()) { result.stopped = true; break; }
       // Pick the next pending entry and mark it in flight, in one step.
       const sent = await store.atomic(async (tx) => {
         const next = (await tx.list(competitionId)).find((e) => e.status === "pending" && (e.seq ?? 0) >= cursor);

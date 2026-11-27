@@ -12,6 +12,11 @@
  * and the error propagates to the caller for display — the rest of the
  * stack stays usable. No retry: the stack cannot know whether the
  * failure is permanent.
+ *
+ * Undo and redo run one at a time, in the order they were asked for (CRS-050): a held or double Ctrl+Z queues the
+ * second behind the first, which picks its entry only once the first has settled, so the redo branch keeps the
+ * order of the undos. An entry may carry `rows` (the D6 guard's tokens, docs/course-editor.md §3); `run`, given to
+ * the constructor, wraps each step and may hand back new rows for the entry.
  */
 
 export interface UndoEntry {
@@ -19,15 +24,31 @@ export interface UndoEntry {
   undo: () => Promise<unknown> | unknown;
   /** Re-apply the original change. */
   redo: () => Promise<unknown> | unknown;
+  /** The rows the entry's last step wrote and their tokens after it (D6); `run` reads and renews them. */
+  rows?: { kind: string; id: number; version: string }[];
 }
+
+/** Runs one step of an entry; may return the entry's new `rows`. */
+export type UndoStepRunner = (entry: UndoEntry, step: () => Promise<unknown> | unknown) => Promise<UndoEntry["rows"] | void>;
 
 export class UndoStack {
   private past: UndoEntry[] = [];
   private future: UndoEntry[] = [];
   private readonly cap: number;
+  private readonly runStep: UndoStepRunner;
+  /** The undo / redo in flight and the ones queued behind it. */
+  private tail: Promise<unknown> = Promise.resolve();
 
-  constructor(cap: number = 50) {
+  constructor(cap: number = 50, runStep?: UndoStepRunner) {
     this.cap = cap;
+    this.runStep = runStep ?? (async (_entry, step) => { await step(); });
+  }
+
+  /** Runs `op` once every earlier undo / redo has settled (a refused one does not stop the queue). */
+  private queued<T>(op: () => Promise<T>): Promise<T> {
+    const next = this.tail.then(op, op);
+    this.tail = next.then(() => undefined, () => undefined);
+    return next;
   }
 
   get canUndo(): boolean {
@@ -68,21 +89,32 @@ export class UndoStack {
     return n - this.past.length - this.future.length;
   }
 
-  /** @returns false when there was nothing to undo. */
-  async undo(): Promise<boolean> {
-    const entry = this.past.pop();
-    if (!entry) return false;
-    await entry.undo(); // a throw drops the entry — see module docs
-    this.future.push(entry);
-    return true;
+  /**
+   * @returns false when there was nothing to undo, or `allow` refused the entry (left in place). Queued behind any
+   * undo / redo in flight: the entry is the top as that one has settled.
+   */
+  undo(allow?: (entry: UndoEntry) => boolean): Promise<boolean> {
+    return this.queued(async () => {
+      const entry = this.past[this.past.length - 1];
+      if (!entry || (allow && !allow(entry))) return false;
+      this.past.pop();
+      const rows = await this.runStep(entry, () => entry.undo()); // a throw drops the entry — see module docs
+      if (rows) entry.rows = rows;
+      this.future.push(entry);
+      return true;
+    });
   }
 
-  /** @returns false when there was nothing to redo. */
-  async redo(): Promise<boolean> {
-    const entry = this.future.pop();
-    if (!entry) return false;
-    await entry.redo();
-    this.past.push(entry);
-    return true;
+  /** @returns false when there was nothing to redo, or `allow` refused the entry. Queued as `undo`. */
+  redo(allow?: (entry: UndoEntry) => boolean): Promise<boolean> {
+    return this.queued(async () => {
+      const entry = this.future[this.future.length - 1];
+      if (!entry || (allow && !allow(entry))) return false;
+      this.future.pop();
+      const rows = await this.runStep(entry, () => entry.redo());
+      if (rows) entry.rows = rows;
+      this.past.push(entry);
+      return true;
+    });
   }
 }

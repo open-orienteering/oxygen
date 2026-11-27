@@ -29,6 +29,7 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [Undo and quick edits reverted another editor's work; queued writes reached another event](editor-concurrent-undo-and-writes.md) | 2026-11-27 |
 | [Two course writes in flight sent one token, and the stale one was a 500](editor-overlapping-course-writes.md) | 2026-11-15 |
 | [A dragged control redrew once a second or worse](course-drag-redraw.md) | 2026-11-08 |
 | [A large white-out outside turned the map white in Layout mode](whiteout-layout.md) | 2026-11-07 |

@@ -262,3 +262,34 @@ describe("the app-code copy, prefetch and offline ready (map-storage.md §7.1, G
     expect(await storagePersisted()).toBe(false);
   });
 });
+
+describe("setMapPatch: an older delivery never replaces a newer one (MAP-8)", () => {
+  beforeEach(() => resetMapPatches());
+  const patch = (enabled: boolean, documentHash = HASH) => ({ documentHash, enabled, ops: {}, symbols: {} }) as unknown as mapDocument.MapPatch;
+
+  it("drops a lower version of the same document's patch, without telling subscribers", () => {
+    expect(setMapPatch("ev", { version: "9", patch: patch(true) })).toBe(true);
+    const seen = vi.fn();
+    const off = subscribeMapPatch("ev", seen);
+    expect(setMapPatch("ev", { version: "8", patch: patch(false) })).toBe(false);
+    expect(getMapPatch("ev")?.version).toBe("9");
+    expect(seen).not.toHaveBeenCalled();
+    expect(setMapPatch("ev", { version: "10", patch: patch(false) })).toBe(true);
+    expect(seen).toHaveBeenCalledTimes(1);
+    off();
+  });
+
+  it("another document, no patch, or version 0 always replaces it", () => {
+    setMapPatch("ev", { version: "9", patch: patch(true) });
+    expect(setMapPatch("ev", { version: "3", patch: patch(true, "cd".repeat(32)) })).toBe(true);
+    expect(setMapPatch("ev", NO_PATCH)).toBe(true);
+    setMapPatch("ev", { version: "9", patch: patch(true) });
+    expect(setMapPatch("ev", { version: "0", patch: patch(true) })).toBe(true);
+  });
+
+  it("a read answering after a newer write's reply keeps the newer copy", async () => {
+    setMapPatch("ev", { version: "9", patch: patch(true) });
+    const fetchImpl = async () => new Response(JSON.stringify({ version: "8", patch: patch(false) }), { status: 200, headers: { "content-type": "application/json" } });
+    expect(await loadMapPatch("ev", { kioskKey: null, fetchImpl })).toEqual({ version: "9", patch: patch(true) });
+  });
+});

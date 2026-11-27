@@ -97,3 +97,10 @@ leg with them.
   `differing: ["v1"]`. On the old code it fails with the uuid error above.
 - E2E: the F7 test under the same CPU load, 20× alone, and a full run (see the
   PR).
+
+## Later
+
+Package 24 of the 2026-11 review extended this queue to structure edits
+(built only after the previous one settled), undo / redo, Layout's sheet
+and template writes and Map mode's patch writes, and added the D6 undo
+guard: [editor-concurrent-undo-and-writes.md](editor-concurrent-undo-and-writes.md).

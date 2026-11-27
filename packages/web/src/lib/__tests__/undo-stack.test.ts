@@ -134,3 +134,63 @@ describe("UndoStack.remove", () => {
     expect(s.canRedo).toBe(false);
   });
 });
+
+describe("UndoStack: one undo / redo at a time (CRS-050)", () => {
+  const deferred = () => { let resolve!: () => void; const p = new Promise<void>((r) => { resolve = r; }); return { p, resolve }; };
+
+  it("overlapping undos run in press order, each picking its entry once the one before has settled; redo is the reverse", async () => {
+    const log: string[] = [];
+    const slow = deferred();
+    const s = new UndoStack();
+    const a = { undo: async () => { log.push("undo:a"); }, redo: async () => { log.push("redo:a"); } };
+    const b = { undo: async () => { log.push("undo:b:start"); await slow.p; log.push("undo:b:end"); }, redo: async () => { log.push("redo:b"); } };
+    s.push(a);
+    s.push(b);
+    const first = s.undo();
+    const second = s.undo(); // a held Ctrl+Z
+    await Promise.resolve();
+    expect(log).toEqual(["undo:b:start"]);
+    slow.resolve();
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+    expect(log).toEqual(["undo:b:start", "undo:b:end", "undo:a"]);
+    expect(s.nextRedo).toBe(a);
+    await s.redo();
+    await s.redo();
+    expect(log.slice(-2)).toEqual(["redo:a", "redo:b"]);
+  });
+
+  it("a refused entry does not block the queue; a third press with nothing left answers false", async () => {
+    const s = new UndoStack();
+    s.push({ undo: async () => undefined, redo: async () => undefined });
+    s.push({ undo: async () => { throw new Error("refused"); }, redo: async () => undefined });
+    const r1 = s.undo();
+    const r2 = s.undo();
+    const r3 = s.undo();
+    await expect(r1).rejects.toThrow("refused");
+    expect(await r2).toBe(true);
+    expect(await r3).toBe(false);
+  });
+
+  it("`allow` is asked when the entry is picked and leaves a refused one in place", async () => {
+    const s = new UndoStack();
+    const e = { undo: async () => undefined, redo: async () => undefined };
+    s.push(e);
+    expect(await s.undo(() => false)).toBe(false);
+    expect(s.top).toBe(e);
+  });
+
+  it("the step runner wraps each step and renews the entry's rows (D6)", async () => {
+    const seen: string[] = [];
+    const s = new UndoStack(50, async (entry, step) => {
+      seen.push(entry.rows?.[0]?.version ?? "-");
+      await step();
+      return [{ kind: "course", id: 1, version: String(Number(entry.rows![0].version) + 1) }];
+    });
+    s.push({ undo: async () => undefined, redo: async () => undefined, rows: [{ kind: "course", id: 1, version: "5" }] });
+    await s.undo();
+    await s.redo();
+    expect(seen).toEqual(["5", "6"]);
+    expect(s.top?.rows).toEqual([{ kind: "course", id: 1, version: "7" }]);
+  });
+});

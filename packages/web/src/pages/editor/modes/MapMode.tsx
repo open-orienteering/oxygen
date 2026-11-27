@@ -231,7 +231,8 @@ export function useMapMode(a: MapModeArgs): MapMode {
 
   // ─── Writes ──
   const deliver = useCallback((res: PatchWriteResult) => {
-    setMapPatch(nameId, res);
+    // An older reply than the copy (MAP-8) changes nothing: the newer delivery and its version stay.
+    if (!setMapPatch(nameId, res)) return;
     utils.course.mapMetadata.setData(undefined, (old) => (old ? { ...old, patchVersion: res.version } : old));
   }, [nameId, utils]);
   /**

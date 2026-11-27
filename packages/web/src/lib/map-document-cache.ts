@@ -304,12 +304,30 @@ export function getMapPatch(nameId: string): MapPatchDelivery | undefined {
   return patches.get(nameId)?.delivery;
 }
 
-/** Replaces the session's copy and tells every viewer of the event (G6's optimistic write goes through here). */
-export function setMapPatch(nameId: string, delivery: MapPatchDelivery): void {
+/**
+ * Replaces the session's copy and tells every viewer of the event (G6's optimistic write goes through here). A
+ * delivery older than the copy of the same document is dropped (MAP-8): versions of one event's patch rise (HLC), so
+ * a reply or a read that arrives after a newer one never takes it back. A delivery without a patch, version `"0"`, or
+ * another `documentHash` (a promote, a new map) always replaces it. @returns whether it replaced the copy.
+ */
+export function setMapPatch(nameId: string, delivery: MapPatchDelivery): boolean {
   const e = patchEntry(nameId);
   const prev = e.delivery;
+  if (isOlderDelivery(prev, delivery)) return false;
   e.delivery = delivery;
   if (prev?.version !== delivery.version || prev.patch !== delivery.patch) for (const l of [...e.listeners]) l();
+  return true;
+}
+
+/** `next` is an older version of the same document's patch than `prev` (`setMapPatch`). */
+export function isOlderDelivery(prev: MapPatchDelivery | undefined, next: MapPatchDelivery): boolean {
+  if (!prev?.patch || !next.patch || next.version === "0") return false;
+  if (prev.patch.documentHash !== next.patch.documentHash) return false;
+  try {
+    return BigInt(next.version) < BigInt(prev.version);
+  } catch {
+    return false;
+  }
 }
 
 /** Calls `fn` whenever the session's copy of the event's patch changes. */
@@ -351,8 +369,8 @@ export function loadMapPatch(nameId: string, opts: FetchOptions = {}): Promise<M
       if (!res.ok) return e.delivery ?? NO_PATCH;
       const delivery = parseMapPatchDelivery(await res.json());
       if (!delivery) return e.delivery ?? NO_PATCH;
-      setMapPatch(nameId, delivery);
-      return delivery;
+      // A read that answers after a newer write's reply keeps the newer copy (MAP-8).
+      return setMapPatch(nameId, delivery) ? delivery : e.delivery ?? delivery;
     } catch {
       return e.delivery ?? NO_PATCH;
     }

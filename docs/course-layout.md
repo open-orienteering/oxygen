@@ -195,7 +195,16 @@ conflict as the editor's refresh notice: the read is refetched and the
 user redoes the gesture — two whole snapshots are never merged. Without
 `baseVersion` a write is last-writer-wins; every Layout write sends one
 (the Courses page's `applyToCourses` and the class overrides are not
-token-guarded row writes).
+token-guarded row writes). Layout mode's book is the editor's own (`EditorWrites`,
+`course-editor.md` §3 "Tokens"), and its sheet and template writes go one
+per row in flight (`writeRow`, CRS-053): a second gesture inside one round
+trip — a scale field committed by a canvas click, then a block drag —
+waits for the first and sends its token, instead of the token both read
+before. `recalculateSheet` queues with them. An undo or redo of a sheet or
+template follows D6 (`course-editor.md` §3 "Undo after another editor's
+change"): it goes through only while the sheet (or the template, for a
+template gesture) is as this client left it, else it is skipped with the
+notice.
 
 **Keys** (08 §5.3 Layout column): `V` select, `H` header, `T` text, `D`
 description block, `W` white-out, `L` line, `R` rectangle, `P` polygon

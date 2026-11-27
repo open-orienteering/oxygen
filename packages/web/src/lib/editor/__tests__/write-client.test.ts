@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { EditorConflict, EditorWrites, type EditorClient } from "../write-client";
+import { EditorConflict, EditorWrites, UndoSkipped, type EditorClient } from "../write-client";
 
 function conflictError(data: object) {
   return Object.assign(new Error("CONFLICT"), { data: { code: "CONFLICT", ...data } });
@@ -344,5 +344,187 @@ describe("EditorWrites (docs/course-editor.md §3)", () => {
     const f = fakeClient();
     const w = new EditorWrites({ ...f.client, mapPatch: undefined });
     expect(() => w.setPatchEnabled(true)).toThrow(/not available/);
+  });
+});
+
+describe("EditorWrites: own chain and the D6 undo guard (docs/course-editor.md §3)", () => {
+  const courseConflict = (version: string) => conflictError({ kind: "course", id: 1, version, differing: ["31"] });
+
+  it("the chain links each own result to the token it was sent on; stillMine follows it, a foreign token breaks it", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("course", 1, "5");
+    f.ok({ version: "6" });
+    f.ok({ version: "7" });
+    await w.setStructure(1, S);
+    await w.setLabelOffset(1, 31, { dx: 1, dy: 0 });
+    expect(w.chainEnd("course", 1, "5")).toBe("7");
+    expect(w.stillMine("course", 1, "6")).toBe(true);
+    w.versions.seed("course", 1, "8"); // someone else's write, seen by the poll
+    expect(w.stillMine("course", 1, "6")).toBe(false);
+  });
+
+  it("own → foreign → own does not count as mine: the own write after the foreign one links from the foreign token", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("course", 1, "5");
+    f.ok({ version: "6" });
+    await w.setStructure(1, S);
+    w.versions.seed("course", 1, "7");
+    f.ok({ version: "8" });
+    await w.setStructure(1, S);
+    expect(w.versions.get("course", 1)).toBe("8");
+    expect(w.stillMine("course", 1, "6")).toBe(false);
+    expect(w.stillMine("course", 1, "7")).toBe(true);
+  });
+
+  it("a structure built on an older token is sent on it, not on the newer one course.list seeded (CRS-049)", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("course", 1, "5");
+    w.versions.seed("course", 1, "6"); // B's write, from the list refetch; the detail still says 5
+    f.fail(courseConflict("6"));
+    await expect(w.setStructure(1, S, { since: "5" })).rejects.toBeInstanceOf(EditorConflict);
+    expect(f.calls[0].input.baseVersion).toBe("5");
+  });
+
+  it("collect returns the rows the call's own writes produced, the last token per row", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    f.ok({ version: "6" });
+    f.ok({ version: "7" });
+    f.ok({ version: "40" });
+    const { rows } = await w.collect(async () => {
+      await w.setStructure(1, S);
+      await w.setStructure(1, S);
+      await w.updateControl({ id: 31, description: null });
+    });
+    expect(rows).toEqual([{ kind: "course", id: 1, version: "7" }, { kind: "control", id: 31, version: "40" }]);
+  });
+
+  it("guarded: an undo of a course changed elsewhere since is skipped before anything is written", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("course", 1, "6");
+    w.versions.seed("course", 1, "7"); // B reordered
+    await expect(w.guarded([{ kind: "course", id: 1, version: "6" }], () => w.setStructure(1, S))).rejects.toBeInstanceOf(UndoSkipped);
+    expect(f.calls).toEqual([]);
+  });
+
+  it("guarded: sent on the entry's own chain, a refusal is UndoSkipped (never a rebase), the rows renewed on success", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("course", 1, "6");
+    f.ok({ version: "9" });
+    expect(await w.guarded([{ kind: "course", id: 1, version: "6" }], () => w.setStructure(1, S))).toEqual([{ kind: "course", id: 1, version: "9" }]);
+    expect(f.calls[0].input.baseVersion).toBe("6");
+    // A change the poll has not seen yet: the server refuses the token.
+    f.fail(courseConflict("12"));
+    await expect(w.guarded([{ kind: "course", id: 1, version: "9" }], () => w.setStructure(1, S))).rejects.toBeInstanceOf(UndoSkipped);
+    expect(f.calls).toHaveLength(2);
+  });
+
+  it("guarded: edit A, edit B, undo B, undo A all go through on the own chain (a label-offset write between them too)", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("course", 1, "5");
+    f.ok({ version: "6" });
+    const a = await w.collect(() => w.setStructure(1, S));
+    f.ok({ version: "7" });
+    await w.setLabelOffset(1, 31, null);
+    f.ok({ version: "8" });
+    const b = await w.collect(() => w.setStructure(1, S));
+    f.ok({ version: "9" });
+    await w.guarded(b.rows, () => w.setStructure(1, S));
+    f.ok({ version: "10" });
+    await w.guarded(a.rows, () => w.setStructure(1, S));
+    // The label offset sends no token (it links from the book's 6).
+    expect(f.calls.map((c) => c.input.baseVersion)).toEqual(["5", undefined, "7", "8", "9"]);
+  });
+
+  it("guarded: a control whose description only was changed elsewhere still has its move undone, keeping their description", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("control", 31, "20");
+    f.fail(conflictError({ kind: "control", id: 31, version: "21", differing: ["description"] }));
+    f.ok({ version: "22" });
+    await w.guarded([{ kind: "control", id: 31, version: "20" }], () => w.updateControl({ id: 31, xpos: 1, ypos: 2, description: null }));
+    expect(f.calls[1].input).toEqual({ id: 31, xpos: 1, ypos: 2, baseVersion: "21" });
+  });
+
+  it("guarded: a control moved elsewhere, or changed in an unknown way, skips the move undo", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("control", 31, "20");
+    f.fail(conflictError({ kind: "control", id: 31, version: "21", differing: ["xpos", "ypos"] }));
+    await expect(w.guarded([{ kind: "control", id: 31, version: "20" }], () => w.updateControl({ id: 31, xpos: 1, ypos: 2 }))).rejects.toBeInstanceOf(UndoSkipped);
+    f.fail(conflictError({ kind: "control", id: 31, version: "22", differing: null }));
+    await expect(w.guarded([{ kind: "control", id: 31, version: "20" }], () => w.updateControl({ id: 31, xpos: 1, ypos: 2 }))).rejects.toBeInstanceOf(UndoSkipped);
+  });
+
+  it("guarded: a course object's undo is never rebased (D6 per object)", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("object", 5, "30");
+    f.fail(conflictError({ kind: "object", id: 5, version: "31", differing: ["props"] }));
+    await expect(w.guarded([{ kind: "object", id: 5, version: "30" }], () => w.updateObject({ id: 5, geometry: { type: "Point", coordinates: [0, 0] } as never }))).rejects.toBeInstanceOf(UndoSkipped);
+    expect(f.calls).toHaveLength(1);
+  });
+
+  it("writes outside an undo still rebase as before", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("control", 31, "20");
+    f.fail(conflictError({ kind: "control", id: 31, version: "21", differing: ["description"] }));
+    f.ok({ version: "22" });
+    await w.updateControl({ id: 31, xpos: 1, ypos: 2 }, { x: 0, y: 0 });
+    expect(f.calls[1].input.baseVersion).toBe("21");
+  });
+});
+
+describe("EditorWrites: Layout rows and map patches one at a time (CRS-053, MAP-8)", () => {
+  const deferred = <T,>() => { let resolve!: (v: T) => void; const p = new Promise<T>((r) => { resolve = r; }); return { p, resolve }; };
+
+  it("a second sheet write waits for the first and is sent on its token", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("sheet", 3, "10");
+    const first = deferred<{ version: string }>();
+    const sent: (string | undefined)[] = [];
+    const one = w.writeRow("sheet", 3, (base) => { sent.push(base); return first.p; });
+    const two = w.writeRow("sheet", 3, async (base) => { sent.push(base); return { version: "12" }; });
+    await Promise.resolve();
+    expect(sent).toEqual(["10"]);
+    first.resolve({ version: "11" });
+    await one;
+    await two;
+    expect(sent).toEqual(["10", "11"]);
+    expect(w.stillMine("sheet", 3, "10")).toBe(true);
+  });
+
+  it("a stale sheet token is a refresh; inside an undo, UndoSkipped", async () => {
+    const w = new EditorWrites(fakeClient().client);
+    w.versions.seed("sheet", 3, "10");
+    const stale = () => Promise.reject(conflictError({ kind: "sheet", id: 3, version: "13", differing: null }));
+    await expect(w.writeRow("sheet", 3, stale)).rejects.toBeInstanceOf(EditorConflict);
+    w.versions.seed("sheet", 3, "13");
+    await expect(w.guarded([{ kind: "sheet", id: 3, version: "10" }], () => w.writeRow("sheet", 3, async () => ({ version: "14" })))).rejects.toBeInstanceOf(UndoSkipped);
+  });
+
+  it("patch writes go one at a time, in order", async () => {
+    const f = fakeClient();
+    const order: string[] = [];
+    const first = deferred<{ version: string; patch: null }>();
+    (f.client.mapPatch!.applyChange.mutate as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => { order.push("a:start"); const r = await first.p; order.push("a:end"); return r; });
+    (f.client.mapPatch!.setEnabled.mutate as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => { order.push("b"); return { version: "8", patch: null }; });
+    const w = new EditorWrites(f.client);
+    const a = w.applyPatchChange("h", { ops: {} } as never);
+    const b = w.setPatchEnabled(false);
+    await Promise.resolve();
+    expect(order).toEqual(["a:start"]);
+    first.resolve({ version: "7", patch: null });
+    await a;
+    await b;
+    expect(order).toEqual(["a:start", "a:end", "b"]);
   });
 });

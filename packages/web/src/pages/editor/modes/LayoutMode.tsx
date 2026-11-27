@@ -23,8 +23,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { validateCourseMap, type CourseMapDocument, type CourseMapObject } from "@oxygen/shared";
 import { trpc } from "../../../lib/trpc";
-import { VersionBook, versionConflictOfError } from "../../../lib/version-book";
-import { EditorConflict } from "../../../lib/editor/write-client";
+import { EditorConflict, UndoSkipped, type EditorWrites } from "../../../lib/editor/write-client";
+import type { EventClient } from "../../../lib/trpc";
 import type { MapViewerEditorProps, ToolPointer } from "../../../components/MapViewer";
 import { descriptionRect, gridSnap, pageBounds, pathFromView, pathRule, toPage, type SheetGeometry } from "../../../lib/editor/layout";
 import { readClipboard, refusal, writeClipboard, type Refusal } from "../../../lib/editor/clipboard";
@@ -58,6 +58,9 @@ export interface LayoutModeArgs {
   variantKey?: string | null;
   /** One write, through the page's pending count and error line; `undefined` when it failed. */
   run: <T>(op: () => Promise<T>) => Promise<T | undefined>;
+  /** The editor's writes (one per row in flight, D6 undo guard) and its client pinned to the editor's event (MC-17). */
+  writes: EditorWrites;
+  client: EventClient;
   record: (undo: () => Promise<unknown>, redo: () => Promise<unknown>) => unknown;
   /** Why a paste was refused (J12), shown on the page's error line; a course object's entry is `clipboardWrongTypePage`. */
   notify?: (why: Refusal | "clipboardWrongTypePage" | "clipboardGraphicsUnknown") => void;
@@ -95,7 +98,7 @@ interface WriteTarget { key: string; scope: "sheet" | "template"; sheetSeq: numb
 
 export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const utils = trpc.useUtils();
-  const client = utils.client;
+  const { client } = a;
   const coarse = useMediaQuery("(pointer: coarse)");
   const canEdit = useCapabilities().has("courses.edit");
   const [target, setTarget] = useState<LayoutTarget | null>(null);
@@ -197,7 +200,9 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
 
   // ─── Writes ──────────────────────────────────────────────
   // The newest token seen per sheet / template (docs/course-layout.md §2): reads and write results raise it.
-  const [versions] = useState(() => new VersionBook());
+  // The editor's own writes and token book (CRS-053, D6): one sheet / template write in flight per row.
+  const { writes } = a;
+  const versions = writes.versions;
   useEffect(() => {
     if (!data) return;
     if (data.sheet) versions.seed("sheet", data.sheet.seq, data.sheet.version);
@@ -211,30 +216,25 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     const id = kind === "sheet" ? w.sheetSeq! : w.templateSeq;
     try {
       if (kind === "sheet") {
-        const r = await client.courseMap.saveLayout.mutate({
+        await writes.writeRow("sheet", id, (baseVersion) => client.courseMap.saveLayout.mutate({
           // The template's objects are locked here and not written: a sheet gesture never touches the template.
           id, windowCenter: s.centre, printScale: s.printScale, description: s.description, objects: s.sheetObjects,
-          baseVersion: versions.get("sheet", id),
-        });
-        versions.seed("sheet", id, r.version);
+          baseVersion,
+        }));
       } else {
-        const r = await client.mapTemplate.update.mutate({ id, ...templateWriteOf(s), baseVersion: versions.get("template", id) });
-        versions.seed("template", id, r.version);
+        await writes.writeRow("template", id, (baseVersion) => client.mapTemplate.update.mutate({ id, ...templateWriteOf(s), baseVersion }));
       }
     } catch (e) {
-      // Another setter wrote the sheet or template: refresh and redo (no merge of whole snapshots).
-      const conflict = versionConflictOfError(e);
-      if (!conflict) throw e;
-      versions.seed(kind, id, conflict.version);
-      void utils.courseMap.resolveSheet.invalidate();
-      throw new EditorConflict({ kind: "refresh", differing: null }, kind, id);
+      // Another setter wrote the sheet or template: refresh and redo (no merge of whole snapshots), or the undo is skipped (D6).
+      if (e instanceof EditorConflict || e instanceof UndoSkipped) void utils.courseMap.resolveSheet.invalidate();
+      throw e;
     }
     setLocal({ key: w.key, snap: s, at: Date.now() });
     void utils.courseMap.resolveSheet.invalidate();
     void utils.courseMap.list.invalidate();
     void utils.mapTemplate.list.invalidate();
     return true;
-  }, [client, utils, versions]);
+  }, [client, utils, writes]);
 
   const { run, record } = a;
   /** One gesture: the whole snapshot written, one undo entry writing back the one it replaced. */
@@ -521,7 +521,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       noSheet={<NoSheetActions view={a.view} course={a.course} canEdit={canEdit} run={run} onOpen={open} />}
       sheetActions={data?.sheet ? (
         <SheetActions sheet={data.sheet} templateSeq={data.template.seq} siblings={siblings} courseName={a.course?.name ?? null}
-          canEdit={canEdit} versions={versions} run={run} record={record} onOpen={open} />
+          canEdit={canEdit} versions={versions} writes={writes} client={client} run={run} record={record} onOpen={open} />
       ) : null}
     />
     {data && (
