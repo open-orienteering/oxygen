@@ -39,13 +39,22 @@ export class UndoStack {
   /** The undo / redo in flight and the ones queued behind it. */
   private tail: Promise<unknown> = Promise.resolve();
 
-  constructor(cap: number = 50, runStep?: UndoStepRunner) {
+  private readonly lock: <T>(op: () => Promise<T>) => Promise<T>;
+
+  /**
+   * `lock`: wraps each undo / redo from picking its entry to the step's end (the editor's write gate, held alone),
+   * so an entry is picked only once every write asked for before it has settled — a gesture in flight records its
+   * entry first, and the undo takes that one.
+   */
+  constructor(cap: number = 50, runStep?: UndoStepRunner, lock?: <T>(op: () => Promise<T>) => Promise<T>) {
     this.cap = cap;
     this.runStep = runStep ?? (async (_entry, step) => { await step(); });
+    this.lock = lock ?? ((op) => op());
   }
 
   /** Runs `op` once every earlier undo / redo has settled (a refused one does not stop the queue). */
-  private queued<T>(op: () => Promise<T>): Promise<T> {
+  private queued<T>(inner: () => Promise<T>): Promise<T> {
+    const op = () => this.lock(inner);
     const next = this.tail.then(op, op);
     this.tail = next.then(() => undefined, () => undefined);
     return next;

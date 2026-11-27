@@ -1072,12 +1072,16 @@ export const controlRouter = router({
           // leaves their structure, so their token too (G1).
           const rebuild = positionChanged ? dependent : [...remirrored];
           await rebuildCourseLengths(tx, ctx.event.id, rebuild);
+          // The re-mirrored courses' public ids, read once (the answer names them by seq).
+          const seqOf = new Map(
+            remirrored.size
+              ? (await tx.course.findMany({ where: { id: { in: [...remirrored] } }, select: { id: true, seq: true } })).map((r) => [r.id, r.seq])
+              : [],
+          );
           for (const courseId of rebuild) {
             const cv = await emitCourseUpserted(tx, ctx.event.id, courseId, { advanceVersion: remirrored.has(courseId) });
-            if (remirrored.has(courseId)) {
-              const row = await tx.course.findUniqueOrThrow({ where: { id: courseId }, select: { seq: true } });
-              advanced.push({ id: row.seq, version: cv.toString() });
-            }
+            const seq = seqOf.get(courseId);
+            if (seq !== undefined) advanced.push({ id: seq, version: cv.toString() });
           }
         }
         return v;

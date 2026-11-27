@@ -76,7 +76,10 @@ export function TemplateKeySection(p: {
     const name = extraTemplateName(p.template.name, new Set(list.map((x) => x.name)), t("layoutExtraWord"));
     const created = await p.run(async () => {
       const row = await utils.client.mapTemplate.duplicate.mutate({ id: p.template.seq, name });
-      if (p.sheetCourse !== null) await utils.client.mapTemplate.applyToCourses.mutate({ templateId: row.seq, courseIds: [p.sheetCourse] });
+      if (p.sheetCourse !== null) {
+        const r = await utils.client.mapTemplate.applyToCourses.mutate({ templateId: row.seq, courseIds: [p.sheetCourse] });
+        p.writes.adoptOwn("sheet", r.sheets);
+      }
       // Awaited: Layout opens only a template its list holds (F31, docs/course-editor.md §1 "URL").
       await Promise.all([utils.courseMap.list.invalidate(), utils.courseMap.resolveSheet.invalidate(), utils.mapTemplate.list.invalidate()]);
       return row;

@@ -200,7 +200,11 @@ token-guarded row writes). Layout mode's book is the editor's own (`EditorWrites
 per row in flight (`writeRow`, CRS-053): a second gesture inside one round
 trip — a scale field committed by a canvas click, then a block drag —
 waits for the first and sends its token, instead of the token both read
-before. `recalculateSheet` queues with them. An undo or redo of a sheet or
+before. Each gesture is sent on the end of this client's own chain from
+the token its snapshot was built on, so a gesture built on one that was
+refused is refused too rather than sent on the newer token the refusal
+brought (which would overwrite the other setter's change).
+`recalculateSheet` queues with them. An undo or redo of a sheet or
 template follows D6 (`course-editor.md` §3 "Undo after another editor's
 change"): it goes through only while the sheet (or the template, for a
 template gesture) is as this client left it, else it is skipped with the

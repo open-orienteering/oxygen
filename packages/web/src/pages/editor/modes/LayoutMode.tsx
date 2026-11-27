@@ -161,11 +161,15 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
 
   // ─── The snapshot: stored, the last write until the refetch has it, a drag's preview ──
   // `seq`: the gesture (or undo step) the snapshot is from; a write's reply never replaces a newer gesture's (CRS-053).
-  const [local, setLocal] = useState<{ key: string; snap: LayoutSnapshot; at: number; seq: number } | null>(null);
+  // `since`: the stored token the local chain of snapshots was built on (a gesture writes on this client's own chain from it).
+  const [local, setLocal] = useState<{ key: string; snap: LayoutSnapshot; at: number; seq: number; since?: string } | null>(null);
   const localSeq = useRef(0);
   const [draft, setDraft] = useState<LayoutSnapshot | null>(null);
   const base = useMemo(() => (data ? snapshotOf(data) : null), [data]);
-  const stored = local && local.key === key && query.dataUpdatedAt <= local.at ? local.snap : base;
+  const fromLocal = !!local && local.key === key && query.dataUpdatedAt <= local.at;
+  const stored = fromLocal ? local!.snap : base;
+  /** The token `stored` was built on (the write's `since`). */
+  const storedSince = fromLocal ? local!.since : data ? (data.scope === "sheet" && data.sheet ? data.sheet.version : data.template.version) : undefined;
   const snap = draft ?? stored;
   const geometry: SheetGeometry | null = useMemo(() => (data && snap ? geometryOf(data, snap) : null), [data, snap]);
   const scoped = useMemo(() => (data && snap ? scopeObjects(data, snap) : { editable: [], locked: [] }), [data, snap]);
@@ -214,7 +218,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const writeTarget: WriteTarget | null = data
     ? { key, scope: data.scope, sheetSeq: data.sheet?.seq ?? null, templateSeq: data.template.seq }
     : null;
-  const save = useCallback(async (w: WriteTarget, s: LayoutSnapshot, gesture?: number) => {
+  const save = useCallback(async (w: WriteTarget, s: LayoutSnapshot, gesture?: number, since?: string) => {
     const seq = gesture ?? ++localSeq.current;
     const kind = w.scope === "sheet" && w.sheetSeq !== null ? "sheet" : "template";
     const id = kind === "sheet" ? w.sheetSeq! : w.templateSeq;
@@ -224,9 +228,9 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
           // The template's objects are locked here and not written: a sheet gesture never touches the template.
           id, windowCenter: s.centre, printScale: s.printScale, description: s.description, objects: s.sheetObjects,
           baseVersion,
-        }));
+        }), since);
       } else {
-        await writes.writeRow("template", id, (baseVersion) => client.mapTemplate.update.mutate({ id, ...templateWriteOf(s), baseVersion }));
+        await writes.writeRow("template", id, (baseVersion) => client.mapTemplate.update.mutate({ id, ...templateWriteOf(s), baseVersion }), since);
       }
     } catch (e) {
       // Another setter wrote the sheet or template: refresh and redo (no merge of whole snapshots), or the undo is skipped (D6).
@@ -234,7 +238,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       throw e;
     }
     // Writes of one sheet go one at a time: a later gesture's optimistic snapshot stays until its own reply.
-    setLocal((l) => (l && l.seq > seq ? l : { key: w.key, snap: s, at: Date.now(), seq }));
+    setLocal((l) => (l && l.seq > seq ? l : { key: w.key, snap: s, at: Date.now(), seq, since: l?.key === w.key ? l.since : since }));
     void utils.courseMap.resolveSheet.invalidate();
     void utils.courseMap.list.invalidate();
     void utils.mapTemplate.list.invalidate();
@@ -245,14 +249,14 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   /** One gesture: the whole snapshot written, one undo entry writing back the one it replaced. */
   const commit = useCallback(async (next: LayoutSnapshot) => {
     if (!writeTarget || !stored) return;
-    const prev = stored, w = writeTarget;
+    const prev = stored, w = writeTarget, since = storedSince;
     const seq = ++localSeq.current;
-    setLocal({ key: w.key, snap: next, at: Number.POSITIVE_INFINITY, seq });
-    const first = () => save(w, next, seq);
+    setLocal({ key: w.key, snap: next, at: Number.POSITIVE_INFINITY, seq, since });
+    const first = () => save(w, next, seq, since);
     if ((await run(first)) === undefined) { setLocal((l) => (l?.seq === seq ? null : l)); return; }
     const redo = () => save(w, next);
     record(() => save(w, prev), redo, first);
-  }, [writeTarget, stored, save, run, record]);
+  }, [writeTarget, stored, storedSince, save, run, record]);
 
   const apply = useCallback((s: LayoutSnapshot, c: LayoutChange): LayoutSnapshot => {
     let next = s;

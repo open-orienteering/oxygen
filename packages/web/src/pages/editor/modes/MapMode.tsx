@@ -68,7 +68,8 @@ export interface MapModeArgs {
   /** `courses.edit`: the `mapPatch.` writes need it (docs/map-patches.md §3.2). */
   canEdit: boolean;
   writes: EditorWrites;
-  run: <T>(op: () => Promise<T>) => Promise<T | undefined>;
+  /** `gated: false` for a write made inside another `run` or an undo / redo step (the page's write gate, §3). */
+  run: <T>(op: () => Promise<T>, move?: undefined, opts?: { gated?: false }) => Promise<T | undefined>;
   record: (undo: () => Promise<unknown>, redo: () => Promise<unknown>) => unknown;
   /** Drops the page's undo entries `drop` matches (a promote drops Map mode's patch entries, §13 "Promote"). */
   forget: (drop: (entry: object) => boolean) => void;
@@ -281,11 +282,13 @@ export function useMapMode(a: MapModeArgs): MapMode {
         const doIt = via ? () => via(documentHash) : undefined;
         const res = await send(documentHash, change, doIt);
         if (keepDraft) setDraft((d) => (d ? { ...d, waitFor: res.version } : d));
-        if (follow) await run(follow.after);
+        // Inside this `run`'s hold of the write gate: ungated, or a queued undo step would wait on it forever.
+        if (follow) await run(follow.after, undefined, { gated: false });
         // Undo / redo drop the focused node: its index may name another node then (§13 "Nodes").
         const entry = record(
-          async () => { setDraft(null); setFocusState(null); await send(documentHash, inverse); if (follow) await run(follow.undo); },
-          async () => { setDraft(null); setFocusState(null); await send(documentHash, change, doIt); if (follow) await run(follow.after); },
+          // The step holds the gate alone: its follow-up runs ungated inside it.
+          async () => { setDraft(null); setFocusState(null); await send(documentHash, inverse); if (follow) await run(follow.undo, undefined, { gated: false }); },
+          async () => { setDraft(null); setFocusState(null); await send(documentHash, change, doIt); if (follow) await run(follow.after, undefined, { gated: false }); },
         );
         if (entry && typeof entry === "object") recorded.current.add(entry);
       } finally {

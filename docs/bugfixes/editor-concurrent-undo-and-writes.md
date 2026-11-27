@@ -21,18 +21,20 @@ Two setters, one course, the course editor polling every 5 s:
 - **D6** (user 2026-11-24): `EditorWrites.guarded` runs an undo or redo only while each row is at the entry's token or one this client reached from it; a write is sent on that token and a refusal is `UndoSkipped`, never a rebase. Controls: the server decides, and a move undo still goes through when the other side changed only other fields (their description kept). A skipped undo drops every entry of that row and shows "Lång was changed by Anna at 14:02; undo skipped".
 - `UndoStack` runs undo / redo on one queue; the entry is picked when its turn comes.
 - A write gate (`WriteGate`): ordinary writes side by side, an undo / redo step alone, so the guard sees only the step's writes and a structure edit is never built on a structure an undo is replacing.
-- Own writes through other procedures are linked too (`adoptOwn`): a kind change's re-mirrored courses, `applyToCourses`'s and the setter procedures' sheets. Control undos are decided field by field, so an own radio toggle or restore never blocks them.
+- Own writes through other procedures are linked too (`adoptOwn`): a kind change's re-mirrored courses, `applyToCourses`'s and the setter procedures' sheets. Control undos are decided field by field, so an own radio toggle or restore never blocks them; such a pass links the control's chain across the other write and remembers its fields, so the next older undo of that control follows it (skipped only when it is about those fields).
 - A positional structure edit (a row's index, a leg's path) queued behind another is refused with "do it again" when the structure changed; an edit of a course no longer selected is dropped.
 - Layout keeps the newest gesture's optimistic snapshot until its own reply.
 - Structure edits run on one queue in the page (`queueStructure`) and are sent on the token of the structure they were built from (`setStructure(…, { since })`).
-- Layout mode's book is the editor's; sheet and template writes go through `EditorWrites.writeRow` (one per row in flight).
+- Layout mode's book is the editor's; sheet and template writes go through `EditorWrites.writeRow` (one per row in flight), each on the end of the own chain from the token its snapshot was built on, so a gesture behind a refused one is refused too.
+- Ctrl+Z picks its entry inside the write gate, after the gestures before it have settled; writes made inside a gated write (Map mode's follow-ups, a structure edit's write) do not ask the gate again, so an undo of a track conversion cannot wait on itself.
+- Positional structure edits (row ✕, ↑ / ↓, leg style and gaps, insert at a place, create variation, move to an alternative, a crossing point routed by leg) queued behind a write of the same course are dropped with "Do it again" when the structure changed meanwhile.
 - `run` clears a notice only when the write was about the notice's row (`clearsNotice`).
 - Patch writes go through `serialRow("patch", 0, …)`; `setMapPatch` drops a lower version of the same document's patch.
 - The editor's writes use `trpcClientForEvent(nameId)`; `CourseEditorRoute` keys the page on the event; the outbox drain takes `active` and stops before the next entry once the editor left the event or closed (the rest stay pending).
 
 ## Tests
 
-- `packages/web/src/lib/editor/__tests__/write-client.test.ts`: the chain, own → foreign → own, `since` against a newer list token, `collect`, the D6 pre-check, refusal, own-chain undo of A and B, the control description rule, objects never rebased, Layout `writeRow` order and refusal, patch writes in order.
+- `packages/web/src/lib/editor/__tests__/write-client.test.ts`: the chain, own → foreign → own, `since` against a newer list token, `collect`, the D6 pre-check, refusal, own-chain undo of A and B, the control description rule, objects never rebased, Layout `writeRow` order, refusal and a gesture behind a refused one, two move undos across a description change elsewhere, patch writes in order.
 - `packages/web/src/lib/__tests__/undo-stack.test.ts`: overlapping undos in press order, a refused entry not blocking, `allow`, rows renewed by the step runner.
 - `packages/web/src/lib/__tests__/map-document-cache.test.ts`: an older delivery dropped, a new document / no patch accepted, a late read keeping the newer copy.
 - `packages/web/src/lib/__tests__/control-outbox.test.ts`: a drain stops when `active` turns false; the rest stay pending.

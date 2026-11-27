@@ -169,15 +169,16 @@ export function EditorPage() {
   const fieldEntries = useRef(new WeakSet<object>());
   // Every other entry undoes and redoes under D6 (docs/course-editor.md §3): only while its rows are still as this
   // client left them, its rows renewed by each step.
+  // The step runs holding the gate alone (`lock`): the entry is picked only once the writes asked for before have settled.
   const [undoStack] = useState(() => new UndoStack(50, async (entry, step, which) => {
     if (fieldEntries.current.has(entry)) { await step(); return undefined; }
     try {
-      return await gate.runExclusive(() => writes.guarded((entry.rows ?? []) as WrittenRow[], async () => step()));
+      return await writes.guarded((entry.rows ?? []) as WrittenRow[], async () => step());
     } catch (e) {
       if (e instanceof UndoSkipped) e.step = which;
       throw e;
     }
-  }));
+  }, (op) => gate.runExclusive(op)));
   const [, setHistVersion] = useState(0);
   const bumpHistory = useCallback(() => setHistVersion((v) => v + 1), []);
   const [moveEpoch, setMoveEpoch] = useState(0);
@@ -248,17 +249,21 @@ export function EditorPage() {
   const latestNames = useRef({ courses: [] as readonly { id: number; name: string }[], coords: new Map<number, { code: string | null }>() });
   useEffect(() => { latestNames.current = { courses: courses.data ?? [], coords: coordsById }; }, [courses.data, coordsById]);
   /** The courses as last polled, for the D6 check of an undo whose `control.delete` cascades (below). */
-  const latestCourses = useRef<readonly { id: number; controls: string; startControlId?: number | null; finishControlId?: number | null }[]>([]);
+  const latestCourses = useRef<readonly { id: number; version: string; controls: string; startControlId?: number | null; finishControlId?: number | null }[]>([]);
   useEffect(() => { latestCourses.current = courses.data ?? []; }, [courses.data]);
   /**
    * D6 for an undo that deletes a control this client created (§3): the delete cascades out of every course that
    * visits it, so the undo is skipped when a course other than `courseId` (the entry's own, if any) visits it now.
    */
   const onlyIn = useCallback((id: number, courseId: number | null) => {
+    // A course whose newest token is this client's own write, or newer than the list's row, is not read from the list:
+    // this client changed it last (an undo a moment ago included), so it is not someone else's change.
     const other = latestCourses.current.find((c) => c.id !== courseId
-      && (c.controls.split(";").filter(Boolean).map(Number).includes(id) || c.startControlId === id || c.finishControlId === id));
-    if (other) throw new UndoSkipped("course", other.id);
-  }, []);
+      && (c.controls.split(";").filter(Boolean).map(Number).includes(id) || c.startControlId === id || c.finishControlId === id)
+      && writes.versions.get("course", c.id) === c.version && !writes.ownCourseVersions.has(c.version));
+    // Skipped as the control's undo: the other course's own entries stay.
+    if (other) throw new UndoSkipped("control", id);
+  }, [writes]);
 
   // Presence (D11): who else has a course open. Heartbeat on the poll's cadence while a course is open.
   const presence = useCoursePresence(state.selectedCourseId, state.mode);
@@ -415,7 +420,7 @@ export function EditorPage() {
 
   /**
    * Push an undo entry for a write that succeeded. `ranAs`: the op `run` ran for it, when not `redo` itself; the
-   * rows it wrote become the entry's D6 guard (none known: the entry undoes unguarded, as before D6).
+   * rows it wrote become the entry's D6 guard (none known: its first step collects them, guarded from then on).
    */
   const record = useCallback((undo: () => Promise<unknown>, redo: () => Promise<unknown>, ranAs: () => Promise<unknown> = redo) => {
     // No rows known (the gesture wrote no token it was told of): guarded from its first step on, which collects them.
@@ -541,7 +546,7 @@ export function EditorPage() {
    * built on the structure as the previous edit left it — on the course selected when it was asked for (another
    * course selected since drops it). `positional`: the edit names rows or legs by their place (a row's index, a
    * leg's path), which only mean the same on the structure it was clicked on: when an edit of this client changed
-   * it meanwhile, the edit is dropped with "wait for the last change to save" rather than applied to another row.
+   * it meanwhile, the edit is dropped with "Do it again" (`structureMovedRetry`) rather than applied to another row.
    */
   const applyStructure = useCallback((edit: (s: Structure) => Structure, opts?: { positional?: boolean }): Promise<boolean> => {
     const courseId = latest.current.selectedCourse?.id ?? null;
@@ -716,7 +721,7 @@ export function EditorPage() {
       const out = createGroup(s, at, latest.current.kindOf, latest.current.orders);
       made = out?.groupId ?? null;
       return out?.structure ?? s;
-    }).then((ok) => {
+    }, { positional: true }).then((ok) => {
       // The new group's A is displayed and active: `K` places into it (§12).
       if (ok && made) dispatch({ type: "alternative", groupId: made, label: "A" });
     });
@@ -742,7 +747,7 @@ export function EditorPage() {
     },
     onLoop: (groupId: string, loop: boolean) => editGroup((s) => setLoop(s, groupId, loop)),
     onMoveTo: (seqIndex: number, groupId: string, label: string) =>
-      editGroup((s) => moveToAlternative(s, seqIndex, groupId, label, latest.current.kindOf, latest.current.orders)),
+      void applyStructure((s) => moveToAlternative(s, seqIndex, groupId, label, latest.current.kindOf, latest.current.orders), { positional: true }),
   }), [isMobile, applyStructure, editGroup]);
   /** The group the selection is in (a row, a leg into a group row, or the last activated): `1–9` picks its alternative. */
   const selectionGroup = useMemo(() => {
@@ -817,6 +822,9 @@ export function EditorPage() {
    * start / finish — and, with a course, write `edit(base, id)` into its structure: one undo entry (§4, §6.1).
    */
   const createSite = useCallback(async (pt: Pt, kind: "control" | "start" | "finish" | "crossing_point" | "map_issue" | "map_exchange", edit: ((s: Structure, id: number) => Structure) | null): Promise<number | null> => {
+    // The course and structure version the click was made on (positional insert, §3 "Structure edits").
+    const courseId = latest.current.selectedCourse?.id ?? null;
+    const clickedOn = currentVersioned()?.version ?? null;
     let code: number | null = null;
     let srr = false;
     // A map exchange takes a code like a control (§6.9).
@@ -843,12 +851,14 @@ export function EditorPage() {
     created.current.set(id, { kind: kind === "start" || kind === "finish" ? kind : "control", pt, code, ...(kind === "crossing_point" || kind === "map_issue" ? { mark: true } : {}) });
     if (srr) await run(() => client.control.upsertConfig.mutate({ controlIds: [id], radioType: "internal_radio" }));
     // The structure part queues with the other structure edits (CRS-018), built on the structure as it is then.
-    const courseId = latest.current.selectedCourse?.id ?? null;
+    // An insert names its place in the structure as it was clicked on (positional, §3 "Structure edits").
     const placed = edit && courseId !== null ? await queueStructure(async () => {
       const course = latest.current.selectedCourse;
       const cur = currentVersioned();
       const base = baseStructure();
-      if (!course || course.id !== courseId || !cur || !base) return false;
+      const action = queuedEditAction({ courseId, version: clickedOn }, { courseId: course?.id ?? null, version: cur?.version ?? null }, true);
+      if (action === "again") setErrorMsg(t("structureMovedRetry"));
+      if (action !== "apply" || !course || !cur || !base) return false;
       const prev = cur.structure;
       const next = edit(base, id);
       const first = () => writeStructure(course.id, next, cur.version);
@@ -863,7 +873,7 @@ export function EditorPage() {
     if (placed) return id;
     record(async () => { onlyIn(id, null); await writes.deleteControl(id); }, () => client.control.restore.mutate({ id }));
     return id;
-  }, [controlList.data, seriesAllocation.data, activeSeriesId, run, client, queueStructure, currentVersioned, baseStructure, writeStructure, writes, record, onlyIn]);
+  }, [controlList.data, seriesAllocation.data, activeSeriesId, run, client, queueStructure, currentVersioned, baseStructure, writeStructure, writes, record, onlyIn, t]);
 
   /** Create a control at `pt`; with `insertAt` also into the selected course at that position (one undo entry). */
   const createControl = useCallback(async (pt: Pt, insertAt: number | null) => {
@@ -1510,7 +1520,7 @@ export function EditorPage() {
         if (targetId !== null) {
           if (latest.current.siteKindOf(targetId) !== "crossing_point") return;
           if (!route) { dispatch({ type: "select", id: targetId }); return; }
-          if (!(await applyStructure((s) => route(s, targetId)))) return;
+          if (!(await applyStructure((s) => route(s, targetId), { positional: true }))) return;
           id = targetId;
         } else {
           id = await createSite(pt, "crossing_point", route);
@@ -1524,7 +1534,7 @@ export function EditorPage() {
           // Reuse the site: into the course at the insertion point, no new site.
           if (chain.insertAt === null) { dispatch({ type: "select", id: targetId }); return; }
           const at = chain.insertAt;
-          if (!(await applyStructure((s) => insertSite(s, at, targetId, kindOfL, latest.current.orders)))) return;
+          if (!(await applyStructure((s) => insertSite(s, at, targetId, kindOfL, latest.current.orders), { positional: true }))) return;
           id = targetId;
         } else {
           const at = chain.insertAt;

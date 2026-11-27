@@ -539,7 +539,7 @@ test.describe("Field mode on a phone (docs/course-editor.md §9, §10)", () => {
     const c = await visibleControl(page);
     const restore = await storedControl(Number(c.id));
     // The server's refusal (a leased event's "checked out to venue"), as tRPC answers the request: a batch an
-    // array, a single call (the editor's client pinned to its event, docs/course-editor.md §9) one object.
+    // array, a single call (the editor's client pinned to its event, docs/course-editor.md §3 "One event per editor") one object.
     const refuse = (route: Route) => {
       if (route.request().method() !== "POST" || !procedures(route.request().url()).includes("control.update")) return route.continue();
       const error = { error: { message: "Event is checked out to venue", code: -32003, data: { code: "FORBIDDEN", httpStatus: 403, path: "control.update" } } };

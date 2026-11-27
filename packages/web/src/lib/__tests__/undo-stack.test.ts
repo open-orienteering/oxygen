@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { UndoStack } from "../undo-stack";
+import { WriteGate } from "../editor/write-gate";
 
 function entry(log: string[], name: string) {
   return {
@@ -192,5 +193,23 @@ describe("UndoStack: one undo / redo at a time (CRS-050)", () => {
     await s.redo();
     expect(seen).toEqual(["5", "6"]);
     expect(s.top?.rows).toEqual([{ kind: "course", id: 1, version: "7" }]);
+  });
+
+  it("with the write gate as its lock, Ctrl+Z during a gesture undoes that gesture once it has settled (CRS-050)", async () => {
+    const gate = new WriteGate();
+    const log: string[] = [];
+    const s = new UndoStack(50, undefined, (op) => gate.runExclusive(op));
+    s.push(entry(log, "a"));
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    // Gesture b is in flight: its entry is pushed when its write settles.
+    const gesture = gate.runShared(async () => { await held; s.push(entry(log, "b")); });
+    const undo = s.undo();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(log).toEqual([]);
+    release();
+    await gesture;
+    await undo;
+    expect(log).toEqual(["undo:b"]);
   });
 });

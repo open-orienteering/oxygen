@@ -173,6 +173,13 @@ export class EditorWrites {
    */
   private readonly ownNext = new Map<string, string>();
 
+  /**
+   * Links a control undo made across another write (the field rule, `updateControl`): `kind:id:base` → the fields
+   * that write changed. The link sits in `ownNext` too, so an older undo of the control follows it; crossing it, the
+   * undo is skipped when it is about one of these fields and leaves them out otherwise.
+   */
+  private readonly bridges = new Map<string, readonly string[]>();
+
   /** Open `collect` calls: every own write's row and result token goes to each (an undo entry's rows, D6). */
   private readonly collectors = new Set<WrittenRow[]>();
 
@@ -232,6 +239,20 @@ export class EditorWrites {
       v = next;
     }
     return v;
+  }
+
+  /** The fields bridged (`bridges`) on this client's own chain from `since`. */
+  private bridgedOn(kind: VersionedKind, id: number, since: string): Set<string> {
+    const out = new Set<string>();
+    let v = since;
+    for (let i = 0; i < 10_000; i++) {
+      const key = `${rowKey(kind, id)}:${v}`;
+      for (const f of this.bridges.get(key) ?? []) out.add(f);
+      const next = this.ownNext.get(key);
+      if (next === undefined) break;
+      v = next;
+    }
+    return out;
   }
 
   /**
@@ -383,19 +404,34 @@ export class EditorWrites {
     // changed (a move undo keeps their description). A change of a field the undo does not write (radio, a restore,
     // a check-off, this client's own included) never blocks it.
     const about: readonly string[] = isMove || ("xpos" in input && "ypos" in input) ? MOVE_FIELDS : fields;
-    const fieldRule = (conflict: { version: string; differing: string[] | null }) => {
-      const differing = conflict.differing;
-      if (!differing || differing.some((f) => about.includes(f))) return null;
-      const kept = Object.fromEntries(Object.entries(input).filter(([k]) => !differing.includes(k)));
-      return () => this.client.control.update.mutate({ ...kept, id: input.id, baseVersion: conflict.version }) as Promise<{ version: string }>;
-    };
     return this.serialRow("control", input.id, async () => {
+      const guardSince = opts?.baseVersion === undefined ? this.guard?.get(rowKey("control", input.id)) : undefined;
+      // An undo that crosses an earlier field-level pass (`bridges`): about a field the other side changed there, it
+      // is skipped; otherwise it leaves those fields out, as the pass did.
+      const crossed = guardSince !== undefined ? this.bridgedOn("control", input.id, guardSince) : new Set<string>();
+      if ([...crossed].some((f) => about.includes(f))) throw new UndoSkipped("control", input.id);
+      const sendInput = crossed.size ? Object.fromEntries(Object.entries(input).filter(([k]) => !crossed.has(k))) as typeof input : input;
+      const sentOn = this.baseFor("control", input.id, opts?.baseVersion);
+      let bridged = null as string[] | null;
+      const fieldRule = (conflict: { version: string; differing: string[] | null }) => {
+        const differing = conflict.differing;
+        if (!differing || differing.some((f) => about.includes(f))) return null;
+        bridged = [...differing, ...crossed];
+        const kept = Object.fromEntries(Object.entries(sendInput).filter(([k]) => !differing.includes(k)));
+        return () => this.client.control.update.mutate({ ...kept, id: input.id, baseVersion: conflict.version }) as Promise<{ version: string }>;
+      };
       const { value: res, base } = await this.withToken("control", input.id, write, (baseVersion) =>
-        this.client.control.update.mutate({ ...input, baseVersion }),
+        this.client.control.update.mutate({ ...sendInput, baseVersion }),
       opts?.baseVersion, fieldRule);
       // A code change re-keys the row: its chain starts again under the new public id.
       const publicId = publicIdAfterCodes(input.id, input.codes);
       this.noteOwn("control", publicId, publicId === input.id ? base : undefined, res.version);
+      // A field-level pass links the undo's own chain across the other write, naming the fields it changed there.
+      if (bridged && publicId === input.id && sentOn !== undefined && sentOn !== res.version) {
+        const key = `${rowKey("control", input.id)}:${sentOn}`;
+        this.ownNext.set(key, res.version);
+        this.bridges.set(key, bridged);
+      }
       // A kind change re-mirrors the courses that visit it and answers their tokens: own writes (D6).
       const courses = (res as { courses?: { id: number; version: string }[] }).courses;
       if (courses?.length) this.adoptOwn("course", courses);
@@ -419,12 +455,14 @@ export class EditorWrites {
    * A Layout-mode write of a sheet or a template (docs/course-layout.md §2), `send(token)` its procedure: one per row
    * in flight (CRS-053: a second gesture inside one round trip sends the first's token, not the one read before it),
    * on the row's token — an undo's own-chain one under D6. Whole snapshots are never merged: a stale token is a
-   * `refresh` (inside an undo, `UndoSkipped`). The result's token is this client's own.
+   * `refresh` (inside an undo, `UndoSkipped`). The result's token is this client's own. `since`: the token the
+   * written snapshot was built on; the write goes on the end of this client's own chain from it, so a gesture built
+   * on an earlier gesture that was refused is refused too, not sent on the newer token the refusal brought.
    */
-  writeRow<T extends { version: string }>(kind: "sheet" | "template", id: number, send: (baseVersion: string | undefined) => Promise<T>): Promise<T> {
+  writeRow<T extends { version: string }>(kind: "sheet" | "template", id: number, send: (baseVersion: string | undefined) => Promise<T>, since?: string): Promise<T> {
     return this.serialRow(kind, id, async () => {
       const guardedRow = this.guard?.has(rowKey(kind, id)) === true;
-      const base = this.baseFor(kind, id, undefined);
+      const base = !guardedRow && since !== undefined ? this.chainEnd(kind, id, since) : this.baseFor(kind, id, undefined);
       let res: T;
       try {
         res = await send(base);

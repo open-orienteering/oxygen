@@ -336,9 +336,14 @@ rows and answer their tokens are linked the same way (`adoptOwn`): a
 **Write gate** (`WriteGate`, `lib/editor/write-gate.ts`): ordinary writes
 (every `run`) go side by side; an undo or redo step runs alone, once
 every write asked for before it has settled, and holds back those asked
-for after it. A structure edit is built and sent inside the gate, so an
-undo never replaces a structure while an edit is built on it, and the
-D6 guard of a step sees only the step's own writes.
+for after it. The step picks its entry inside the gate, so Ctrl+Z
+pressed while a gesture is in flight undoes that gesture once it has
+settled, not the one before it. A structure edit is built and sent
+inside the gate, so an undo never replaces a structure while an edit is
+built on it, and the D6 guard of a step sees only the step's own writes.
+A write made inside a gated one (a structure edit's write, Map mode's
+follow-up after a patch write, an undo step's own writes) does not ask
+the gate again: it already holds it.
 
 **Undo after another editor's change** (D6, user 2026-11-24, review
 CRS-016). The undo list is this tab's own actions; an entry stores the
@@ -361,6 +366,11 @@ one this client's own writes reached from it (`EditorWrites.guarded`):
   a move undo restores the position and keeps a description changed
   elsewhere; a change of a field the undo does not write (radio, a
   check-off, a restore, this client's own included) never blocks it.
+  Such a pass links the control's own chain across the other write and
+  names the fields it changed there, so an older undo of the same
+  control follows it: one about those fields is skipped, any other goes
+  through and leaves them out too (two move undos across a description
+  change both restore their position).
 - **A control this client created**: its undo deletes it, and the delete
   cascades out of every course that visits it. The undo is skipped when a
   course other than the entry's own visits it now (from the last
@@ -3546,18 +3556,34 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   do Field mode's queued entries (a move elsewhere on replay is still
   Keep mine / Keep theirs). Layout's class overrides (`setClassOverride`)
   answer no sheet tokens: a class sheet's undo after one is skipped.
+  The redo of a bulk delete deletes again and cascades out of courses
+  another editor added the control to since (the created-control check
+  covers only the undo of a creation). The Field-mode outbox drain does
+  not ask the write gate: a queued move without a token that goes out
+  while an undo step of the same control runs is sent on the step's
+  own-chain token and collected into its entry. Field mode runs a
+  gesture's first write before its outbox entry is stored, and a write
+  outside `trpcClientForEvent` (no timeout) holds the gate as long as it
+  hangs. A placement chain's step (`Shift+K` chain) reads the top entry
+  when the key is pressed, not when its queued undo picks it.
+  `deleteControl` and `adoptOwn` link a course's chain from the book's
+  token as the reply arrives, so a poll that seeded another editor's
+  token inside that round trip is bridged.
 - **Tokens of instructions and winner pace** (§3 "Tokens"): they are sent
   on the book's token, not the token of the value they were built from,
   as structures are (CRS-049's shape; their own queue orders this
   client's writes).
-- **Still on the page's event** (§9 "One event per editor"): reads (the
+- **Still on the page's event** (§3 "One event per editor"): reads (the
   query cache is not keyed per event, MC-04), and the Layout key,
   setter, class-override, club-template and sheet-creation sections, the
   export menu, leg routes, climb refresh, overprint cuts and the contour
   interval, which write through the URL-bound client: one sent as the
   page changes event can reach the new event (the page key makes it
-  rare). A Layout save whose first write failed leaves its change in the
-  next gesture's snapshot, which then saves it.
+  rare). `mapPatch.promote` (Map mode's *Promote*) also writes through
+  the URL-bound client. A Layout gesture is sent on the end of this
+  client's own chain from the token its snapshot was built on, so a
+  gesture built on a refused one is refused too (both redone after the
+  refresh).
 - **An older "no patch" read** (§13): `setMapPatch` compares versions only
   between two deliveries of one document's patch, so a read without a
   patch answering after a write's reply still replaces it until the next

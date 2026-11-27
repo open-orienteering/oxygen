@@ -452,6 +452,31 @@ describe("EditorWrites: own chain and the D6 undo guard (docs/course-editor.md �
     expect(f.calls[1].input).toEqual({ id: 31, xpos: 1, ypos: 2, baseVersion: "21" });
   });
 
+  it("guarded: two move undos across a description change elsewhere both go through; a description undo across it is skipped", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    // Two own moves: 10 → 11 → 12. Then Anna edits the description: 13.
+    w.versions.seed("control", 31, "10");
+    f.ok({ version: "11" });
+    await w.updateControl({ id: 31, xpos: 5, ypos: 5 }, { x: 0, y: 0 });
+    f.ok({ version: "12" });
+    await w.updateControl({ id: 31, xpos: 9, ypos: 9 }, { x: 5, y: 5 });
+    w.versions.seed("control", 31, "13");
+    // Undo 1 (entry token 12): refused on 12, the field rule passes on 13 → 14.
+    f.fail(conflictError({ kind: "control", id: 31, version: "13", differing: ["description"] }));
+    f.ok({ version: "14" });
+    await w.guarded([{ kind: "control", id: 31, version: "12" }], () => w.updateControl({ id: 31, xpos: 5, ypos: 5 }, { x: 9, y: 9 }));
+    // Undo 2 (entry token 11): its own chain crosses the pass, so it goes out on 14 and is accepted.
+    f.ok({ version: "15" });
+    await w.guarded([{ kind: "control", id: 31, version: "11" }], () => w.updateControl({ id: 31, xpos: 0, ypos: 0, description: null }, { x: 5, y: 5 }));
+    const last = f.calls[f.calls.length - 1].input;
+    expect(last).toEqual({ id: 31, xpos: 0, ypos: 0, baseVersion: "14" });
+    // An undo about the description that crosses the same pass is skipped without a write.
+    const before = f.calls.length;
+    await expect(w.guarded([{ kind: "control", id: 31, version: "11" }], () => w.updateControl({ id: 31, description: "old" }))).rejects.toBeInstanceOf(UndoSkipped);
+    expect(f.calls.length).toBe(before);
+  });
+
   it("guarded: a control moved elsewhere, or changed in an unknown way, skips the move undo", async () => {
     const f = fakeClient();
     const w = new EditorWrites(f.client);
@@ -545,6 +570,26 @@ describe("EditorWrites: Layout rows and map patches one at a time (CRS-053, MAP-
     await expect(w.writeRow("sheet", 3, stale)).rejects.toBeInstanceOf(EditorConflict);
     w.versions.seed("sheet", 3, "13");
     await expect(w.guarded([{ kind: "sheet", id: 3, version: "10" }], () => w.writeRow("sheet", 3, async () => ({ version: "14" })))).rejects.toBeInstanceOf(UndoSkipped);
+  });
+
+  it("a gesture built on a refused gesture is refused too (since), one built on an own write goes on its result", async () => {
+    const w = new EditorWrites(fakeClient().client);
+    w.versions.seed("sheet", 3, "10");
+    const sent: (string | undefined)[] = [];
+    // Gesture 1 is refused: another setter wrote 13. Gesture 2 was built on gesture 1's snapshot, i.e. on 10.
+    const one = w.writeRow("sheet", 3, (base) => { sent.push(base); return Promise.reject(conflictError({ kind: "sheet", id: 3, version: "13", differing: null })); }, "10");
+    const two = w.writeRow("sheet", 3, (base) => {
+      sent.push(base);
+      return base === "13" ? Promise.resolve({ version: "14" }) : Promise.reject(conflictError({ kind: "sheet", id: 3, version: "13", differing: null }));
+    }, "10");
+    await expect(one).rejects.toBeInstanceOf(EditorConflict);
+    await expect(two).rejects.toBeInstanceOf(EditorConflict);
+    expect(sent).toEqual(["10", "10"]);
+    // Built on 13 and an own write from there: the next one follows the own chain.
+    await w.writeRow("sheet", 3, async () => ({ version: "14" }), "13");
+    const after: (string | undefined)[] = [];
+    await w.writeRow("sheet", 3, async (base) => { after.push(base); return { version: "15" }; }, "13");
+    expect(after).toEqual(["14"]);
   });
 
   it("patch writes go one at a time, in order", async () => {
