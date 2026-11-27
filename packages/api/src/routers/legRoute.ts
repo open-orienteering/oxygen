@@ -57,7 +57,7 @@ async function findRoute(db: PrismaClient | Tx, eventId: bigint, id: string): Pr
 
 /** The pair's climb changed: the courses running it are cleared here and computed after the commit. */
 async function pairChanged(tx: Tx, eventId: bigint, from: string, to: string): Promise<void> {
-  await clearComputedClimbs(tx, eventId, await coursesRunningPair(tx, eventId, from, to));
+  await clearComputedClimbs(tx, eventId, await coursesRunningPair(tx, eventId, from, to), { emit: true });
 }
 
 /** Two writers choosing a route for one pair at once: the second meets the one-chosen index (§7.2). */

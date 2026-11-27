@@ -1058,6 +1058,9 @@ export const courseRouter = router({
           await rebuildCourseLengths(tx, ctx.event.id, [c.id], {
             updateLength: input.length === undefined,
           });
+        } else if (input.firstAsStart !== undefined || input.lastAsFinish !== undefined) {
+          // The ends move the legs the computed climb rests on (§6 "When"), as in `bulkUpdate`.
+          await clearComputedClimbs(tx, ctx.event.id, [c.id]);
         }
         // A root's name, climb, maps and instructions reach its variants.
         const mirrored =

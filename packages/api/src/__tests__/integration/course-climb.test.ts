@@ -218,6 +218,37 @@ describe("the course's stored climb (docs/course-elevation.md §6)", () => {
     expect(await climbOf(over)).toEqual(before);
   });
 
+  it("course.update moving the course's ends clears a computed climb and computes it again", async () => {
+    const before = await climbOf(over);
+    expect(before.source).toBe("computed");
+    // A stale number the compute would not write: the update must not leave it standing.
+    await ctx.db.course.updateMany({ where: { eventId: ctx.eventId, seq: over }, data: { climbM: 777, climbSource: "computed" } });
+    await caller.course.update({ id: over, firstAsStart: true });
+    expect((await climbOf(over)).m).not.toBe(777);
+    await ctx.db.course.updateMany({ where: { eventId: ctx.eventId, seq: over }, data: { climbM: 777, climbSource: "computed" } });
+    await caller.course.update({ id: over, firstAsStart: false });
+    expect(await climbOf(over)).toEqual(before);
+    await ctx.db.course.updateMany({ where: { eventId: ctx.eventId, seq: over }, data: { climbM: 777, climbSource: "computed" } });
+    await caller.course.update({ id: over, lastAsFinish: false });
+    expect((await climbOf(over)).m).not.toBe(777);
+  });
+
+  it("a clear outside an edit that journals the course journals the cleared row itself (§6)", async () => {
+    // The flat event's field is not stored: after a route is chosen the course gets no climb, but the clear is journaled.
+    const a = (await flatCaller.control.create({ codes: "41", xpos: 8, ypos: 20 })).id;
+    const b = (await flatCaller.control.create({ codes: "42", xpos: 30, ypos: 20 })).id;
+    const id = (await flatCaller.course.create({ name: "Cleared", controlIds: [a, b] })).id;
+    const row = await rowOf(flat, id);
+    await flat.db.course.update({ where: { id: row.id }, data: { climbM: 55, climbSource: "computed" } });
+    const latest = async () => {
+      const e = await flat.db.journalEntry.findFirstOrThrow({ where: { eventId: flat.eventId, type: "course.upserted", payload: { path: ["id"], equals: row.id } }, orderBy: { hlc: "desc" } });
+      return (e.payload as { fields: { climbM: number } }).fields.climbM;
+    };
+    await flatCaller.legRoute.save({ fromControlId: a, toControlId: b, points: [{ x: 18, y: 30 }] });
+    expect((await rowOf(flat, id)).climbM).toBe(0);
+    expect(await latest()).toBe(0);
+  });
+
   it("a climb arriving through the journal is held as a typed one, and a cleared one is computed again", async () => {
     const row = await rowOf(ctx, over);
     const computed = await climbOf(over);
