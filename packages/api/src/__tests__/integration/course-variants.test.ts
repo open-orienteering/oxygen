@@ -376,8 +376,10 @@ describe("control.delete re-materialises the roots naming it (course-layer.md §
 });
 
 describe("course.importCourses over a root", () => {
-  it("replaces it with the file's linear course and drops its variants", async () => {
-    const { id } = await caller.course.create({ name: "Imported root" });
+  // Merge leaves a local fork alone: the file formats cannot carry it
+  // (course-layer.md §6.4 "Import semantics", §12.5; decision D3).
+  it("Merge leaves it and its variants alone and says so", async () => {
+    const { id } = await caller.course.create({ name: "Merged root" });
     await write(id, [ctl(S), ctl(31), group("g", [[32], [33]]), ctl(34), ctl(F)]);
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <CourseData xmlns="http://www.orienteering.org/datastandard/3.0" iofVersion="3.0">
@@ -386,7 +388,7 @@ describe("course.importCourses over a root", () => {
     <Control type="Control"><Id>31</Id></Control>
     <Control type="Control"><Id>34</Id></Control>
     <Course>
-      <Name>Imported root</Name>
+      <Name>Merged root</Name>
       <Length>2500</Length>
       <CourseControl type="Control"><Control>31</Control></CourseControl>
       <CourseControl type="Control"><Control>34</Control></CourseControl>
@@ -394,14 +396,12 @@ describe("course.importCourses over a root", () => {
   </RaceCourseData>
 </CourseData>`;
     const kidsBefore = await children(id);
-    const entries = await entriesDuring(() => caller.course.importCourses({ xmlContent: xml, skipPositions: true }));
-    expect(await children(id)).toEqual([]);
-    const imported = entries.find((e) => e.type === "reference.imported")!;
-    const courses = (imported.payload as { courses: { id: string; fields: Record<string, unknown> }[] }).courses;
-    for (const k of kidsBefore) expect(courses.find((c) => c.id === k.id)?.fields.removed).toBe(true);
+    const result = await caller.course.importCourses({ xmlContent: xml, skipPositions: true });
+    expect(result.coursesSkippedForked).toEqual(["Merged root"]);
+    expect((await children(id)).map((k) => k.id)).toEqual(kidsBefore.map((k) => k.id));
   });
 
-  it("with replaceAll clears the runners and pools of every variant the wipe removed", async () => {
+  it("with replaceAll replaces it with the file's linear course and clears the runners and pools of every variant it dropped", async () => {
     // Its own event: replaceAll wipes every course.
     const own = await createTestEvent("course_variants_replace_all");
     try {
@@ -442,6 +442,12 @@ describe("course.importCourses over a root", () => {
       const ru = await own.db.journalEntry.findFirstOrThrow({ where: { eventId: own.eventId, type: "runner.updated" }, orderBy: { hlc: "desc" } });
       expect(ru.payload).toEqual({ cardNo: 7300001, runnerId: runner.seq, fields: { courseId: null } });
       expect(await own.db.course.count({ where: { parentCourseId: root.id, removed: false } })).toBe(0);
+      // The entry carries the dropped variants as removed rows for a peer.
+      const imported = await own.db.journalEntry.findFirstOrThrow({ where: { eventId: own.eventId, type: "reference.imported" }, orderBy: { hlc: "desc" } });
+      const courses = (imported.payload as { courses: { id: string; fields: Record<string, unknown> }[] }).courses;
+      for (const k of await own.db.course.findMany({ where: { parentCourseId: root.id } })) {
+        expect(courses.find((x) => x.id === k.id)?.fields.removed).toBe(true);
+      }
     } finally {
       await own.cleanup();
     }
