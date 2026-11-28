@@ -45,9 +45,9 @@
     "yaml": "^2.9.1"
   },
   "dependencies": {
-    "i18next": "^27.1.1",
+    "i18next": "^27.2.2",
     "qrcode.react": "^4.2.0",
-    "react-i18next": "^18.0.1",
+    "react-i18next": "^18.0.3",
     "svg-control-descriptions": "^2.1.0"
   },
   "pnpm": {
