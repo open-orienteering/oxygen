@@ -33,13 +33,13 @@
   },
   "dependencies": {
     "@fastify/cors": "^11.4.3",
-    "@fastify/static": "^10.1.11",
+    "@fastify/static": "^10.1.12",
     "@oxygen/shared": "workspace:*",
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
     "@resvg/resvg-js": "^2.6.2",
-    "@trpc/client": "^11.28.0",
-    "@trpc/server": "^11.28.0",
+    "@trpc/client": "^11.29.5",
+    "@trpc/server": "^11.29.5",
     "adm-zip": "^0.6.1",
     "dotenv": "^18.0.10",
     "fast-xml-parser": "^5.12.1",
@@ -58,10 +58,10 @@
   "devDependencies": {
     "@types/node": "^26.6.6",
     "@types/pg": "^8.23.1",
-    "@vitest/coverage-v8": "^5.1.0",
+    "@vitest/coverage-v8": "^5.1.1",
     "prisma": "^7.10.1",
     "tsx": "^4.23.15",
     "typescript": "~6.0.3",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.1"
   }
 }
